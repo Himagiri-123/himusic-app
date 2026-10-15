@@ -15,6 +15,7 @@ export function PlayerProvider({ children }) {
   const streamRef = useRef(null);
   const modeRef = useRef("audio");
   const errCount = useRef(0);
+  const pendingRef = useRef(null);
 
   const [current, setCurrent] = useState(null);
   const [mode, setModeState] = useState("audio");
@@ -29,11 +30,13 @@ export function PlayerProvider({ children }) {
   const applySource = useCallback((s, m, resumeAt = 0) => {
     const el = mediaRef.current;
     if (!el || !s) return;
+    if (pendingRef.current) el.removeEventListener("loadedmetadata", pendingRef.current);
     el.src = m === "video" && s.videoUrl ? s.videoUrl : s.audioUrl;
     const start = () => {
       if (resumeAt) el.currentTime = resumeAt;
       el.play().catch(() => {});
     };
+    pendingRef.current = start;
     el.addEventListener("loadedmetadata", start, { once: true });
     el.load();
   }, []);
@@ -56,7 +59,6 @@ export function PlayerProvider({ children }) {
         }
         applySource(s, modeRef.current);
         addHistory(song);
-        errCount.current = 0;
       } catch (e) {
         setError(e.message || "Could not play");
         setPlaying(false);
@@ -181,6 +183,11 @@ export function PlayerProvider({ children }) {
         playsInline
         preload="auto"
         controls={false}
+        referrerPolicy="no-referrer"
+        onPlaying={() => {
+          errCount.current = 0;
+          setError("");
+        }}
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
         onEnded={() => nextRef.current?.()}
@@ -190,9 +197,19 @@ export function PlayerProvider({ children }) {
             dur: e.currentTarget.duration || current?.duration || 0,
           })
         }
-        onError={() => {
-          setError("Playback failed. Skipping...");
-          if (errCount.current++ < 3) setTimeout(() => nextRef.current?.(), 1200);
+        onError={(e) => {
+          const el = e.currentTarget;
+          if (!el.getAttribute("src")) return;
+          // video failed -> fall back to audio at the same position
+          if (modeRef.current === "video" && streamRef.current?.audioUrl) {
+            setError("Video failed, switched to audio");
+            modeRef.current = "audio";
+            setModeState("audio");
+            applySource(streamRef.current, "audio", el.currentTime);
+            return;
+          }
+          setError(`Playback failed (code ${el.error?.code ?? "?"}). Skipping...`);
+          if (errCount.current++ < 3) setTimeout(() => nextRef.current?.(), 1500);
         }}
       />
     </Ctx.Provider>

@@ -2,20 +2,21 @@ import { Router } from "express";
 
 const router = Router();
 
-// Open-source YouTube front-ends. Public instances go down often,
-// so we try them one by one. Override with env vars if you self-host.
-const PIPED = (
-  process.env.PIPED_INSTANCES ||
-  "https://pipedapi.kavin.rocks,https://pipedapi.adminforge.de,https://api.piped.private.coffee"
-)
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
+// Open-source YouTube front-ends. Public instances come and go, so we use a
+// static list plus (when no env override is set) a live list of healthy ones.
+const STATIC_PIPED = [
+  "https://pipedapi.kavin.rocks",
+  "https://pipedapi.adminforge.de",
+  "https://api.piped.private.coffee",
+];
+const STATIC_INV = ["https://inv.nadeko.net", "https://yewtu.be"];
 
-const INVIDIOUS = (process.env.INVIDIOUS_INSTANCES || "https://inv.nadeko.net,https://yewtu.be")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
+const list = (v) =>
+  (v || "")
+    .split(",")
+    .map((s) => s.trim().replace(/\/$/, ""))
+    .filter(Boolean);
+const uniq = (a) => [...new Set(a)];
 
 async function getJSON(url, ms = 8000) {
   const ctrl = new AbortController();
@@ -29,117 +30,263 @@ async function getJSON(url, ms = 8000) {
   }
 }
 
-async function firstOk(tasks) {
-  let lastErr;
-  for (const t of tasks) {
+let cache = { at: 0, piped: [], inv: [] };
+
+async function instances() {
+  if (cache.at && Date.now() - cache.at < 10 * 60 * 1000) return cache;
+  const envP = list(process.env.PIPED_INSTANCES);
+  const envI = list(process.env.INVIDIOUS_INSTANCES);
+  let piped = envP;
+  let inv = envI;
+
+  if (!envP.length) {
+    let found = [];
     try {
-      return await t();
-    } catch (e) {
-      lastErr = e;
-    }
+      const l = await getJSON("https://piped-instances.kavin.rocks/", 4000);
+      found = l
+        .filter((i) => i.api_url && i.up_to_date !== false)
+        .map((i) => i.api_url.replace(/\/$/, ""));
+    } catch {}
+    piped = uniq([...STATIC_PIPED, ...found]).slice(0, 8);
   }
-  throw lastErr || new Error("No instance available");
+  if (!envI.length) {
+    let found = [];
+    try {
+      const l = await getJSON("https://api.invidious.io/instances.json?sort_by=health", 4000);
+      found = l
+        .filter(([, i]) => i.api === true && i.type === "https" && i.uri)
+        .map(([, i]) => i.uri.replace(/\/$/, ""));
+    } catch {}
+    inv = uniq([...STATIC_INV, ...found]).slice(0, 5);
+  }
+  cache = { at: Date.now(), piped, inv };
+  return cache;
+}
+
+// Run all tasks in parallel, return the first success.
+async function any(tasks) {
+  try {
+    return await Promise.any(
+      tasks.map(([name, fn]) =>
+        fn().catch((e) => {
+          throw new Error(`${name}: ${e.message}`);
+        })
+      )
+    );
+  } catch (e) {
+    const err = new Error("all instances failed");
+    err.details = (e.errors || []).map((x) => x.message);
+    throw err;
+  }
 }
 
 const idFromUrl = (u = "") => (u.match(/[?&]v=([^&]+)/) || [])[1] || "";
+
+/* ---------- stream URL helpers ---------- */
+
+// Piped returns raw googlevideo URLs that are locked to the instance's IP.
+// The Piped frontend rewrites them to the instance's proxy; we do the same.
+function fixUrl(u, base, proxy) {
+  const url = new URL(u, base);
+  if (proxy && url.hostname.endsWith("googlevideo.com")) {
+    url.searchParams.set("host", url.host);
+    url.host = proxy.host;
+    url.protocol = proxy.protocol;
+  }
+  if (url.protocol === "http:" && !/^(localhost|127\.)/.test(url.hostname)) {
+    url.protocol = "https:"; // browsers block http audio on https pages
+  }
+  return url.toString();
+}
+
+// Prefer AAC/mp4 (plays everywhere, incl. iPhone), about 128kbps (small data use).
+function rankAudio(items) {
+  const score = (s) =>
+    (/mp4|m4a|aac/.test(s.mime) ? 0 : 1) * 1e9 +
+    (s.bitrate <= 140000 ? 140000 - s.bitrate : 1e6 + s.bitrate);
+  return [...items].sort((a, b) => score(a) - score(b)).slice(0, 3);
+}
+
+// Check from the server that the proxied URL really serves bytes.
+async function reachable(url) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 7000);
+  try {
+    const r = await fetch(url, { headers: { Range: "bytes=0-1" }, signal: ctrl.signal });
+    const ok = r.status === 200 || r.status === 206;
+    try {
+      await r.body?.cancel();
+    } catch {}
+    if (!ok) throw new Error(`audio HTTP ${r.status}`);
+    return true;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+async function pipedResolve(base, id) {
+  const d = await getJSON(`${base}/streams/${id}`, 9000);
+  if (d.error) throw new Error(String(d.error).slice(0, 80));
+  const proxy = d.proxyUrl ? new URL(d.proxyUrl) : null;
+  const audio = (d.audioStreams || [])
+    .filter((s) => s.url && !s.videoOnly && (s.mimeType || "").startsWith("audio"))
+    .map((s) => ({ url: s.url, bitrate: s.bitrate || 0, mime: s.mimeType }));
+  if (!audio.length) throw new Error("no audio streams");
+  const video = (d.videoStreams || []).find(
+    (s) => s.url && !s.videoOnly && (s.mimeType || "").startsWith("video")
+  );
+  return {
+    audioCandidates: rankAudio(audio).map((s) => fixUrl(s.url, base, proxy)),
+    videoUrl: video ? fixUrl(video.url, base, proxy) : null,
+    related: (d.relatedStreams || [])
+      .filter((r) => r.type === "stream" && r.url)
+      .slice(0, 15)
+      .map((r) => ({
+        id: idFromUrl(r.url),
+        title: r.title,
+        artist: r.uploaderName,
+        thumbnail: r.thumbnail,
+        duration: r.duration,
+      })),
+  };
+}
+
+async function invResolve(base, id) {
+  // local=true makes the instance proxy the media (otherwise IP-locked)
+  const d = await getJSON(`${base}/api/v1/videos/${id}?local=true`, 9000);
+  if (d.error) throw new Error(String(d.error).slice(0, 80));
+  const audio = (d.adaptiveFormats || [])
+    .filter((f) => f.url && (f.type || "").startsWith("audio"))
+    .map((f) => ({ url: f.url, bitrate: Number(f.bitrate) || 0, mime: f.type }));
+  if (!audio.length) throw new Error("no audio streams");
+  const muxed = (d.formatStreams || []).find((f) => f.url);
+  return {
+    audioCandidates: rankAudio(audio).map((s) => fixUrl(s.url, base, null)),
+    videoUrl: muxed ? fixUrl(muxed.url, base, null) : null,
+    related: (d.recommendedVideos || []).slice(0, 15).map((r) => ({
+      id: r.videoId,
+      title: r.title,
+      artist: r.author,
+      thumbnail: r.videoThumbnails?.[3]?.url || r.videoThumbnails?.[0]?.url,
+      duration: r.lengthSeconds,
+    })),
+  };
+}
+
+function withVerify(resolve, base, id) {
+  return async () => {
+    const r = await resolve(base, id);
+    let lastErr;
+    for (const url of r.audioCandidates) {
+      try {
+        await reachable(url);
+        return { audioUrl: url, videoUrl: r.videoUrl, related: r.related };
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw lastErr || new Error("no reachable audio");
+  };
+}
+
+function streamTasks(id, inst) {
+  return [
+    ...inst.piped.slice(0, 6).map((b) => [b, withVerify(pipedResolve, b, id)]),
+    ...inst.inv.slice(0, 4).map((b) => [b, withVerify(invResolve, b, id)]),
+  ];
+}
+
+/* ---------- routes ---------- */
 
 // GET /api/music/search?q=...
 router.get("/search", async (req, res) => {
   const q = (req.query.q || "").toString().trim();
   if (!q) return res.json({ results: [] });
   try {
+    const inst = await instances();
     const tasks = [
-      ...PIPED.map((base) => async () => {
-        const d = await getJSON(
-          `${base}/search?q=${encodeURIComponent(q)}&filter=music_songs`
-        );
-        const items = (d.items || []).filter((i) => i.url?.includes("watch"));
-        if (!items.length) throw new Error("empty");
-        return items.map((i) => ({
-          id: idFromUrl(i.url),
-          title: i.title,
-          artist: i.uploaderName,
-          thumbnail: i.thumbnail,
-          duration: i.duration,
-        }));
-      }),
-      ...INVIDIOUS.map((base) => async () => {
-        const d = await getJSON(
-          `${base}/api/v1/search?q=${encodeURIComponent(q)}&type=video`
-        );
-        if (!d.length) throw new Error("empty");
-        return d.map((i) => ({
-          id: i.videoId,
-          title: i.title,
-          artist: i.author,
-          thumbnail: i.videoThumbnails?.[3]?.url || i.videoThumbnails?.[0]?.url,
-          duration: i.lengthSeconds,
-        }));
-      }),
+      ...inst.piped.slice(0, 4).map((base) => [
+        base,
+        async () => {
+          const d = await getJSON(
+            `${base}/search?q=${encodeURIComponent(q)}&filter=music_songs`
+          );
+          const items = (d.items || []).filter((i) => i.url?.includes("watch"));
+          if (!items.length) throw new Error("empty");
+          return items.map((i) => ({
+            id: idFromUrl(i.url),
+            title: i.title,
+            artist: i.uploaderName,
+            thumbnail: i.thumbnail,
+            duration: i.duration,
+          }));
+        },
+      ]),
+      ...inst.inv.slice(0, 3).map((base) => [
+        base,
+        async () => {
+          const d = await getJSON(
+            `${base}/api/v1/search?q=${encodeURIComponent(q)}&type=video`
+          );
+          if (!d.length) throw new Error("empty");
+          return d.map((i) => ({
+            id: i.videoId,
+            title: i.title,
+            artist: i.author,
+            thumbnail: i.videoThumbnails?.[3]?.url || i.videoThumbnails?.[0]?.url,
+            duration: i.lengthSeconds,
+          }));
+        },
+      ]),
     ];
-    res.json({ results: await firstOk(tasks) });
+    res.json({ results: await any(tasks) });
   } catch (e) {
-    res.status(502).json({ error: "Search failed. Streaming instances busy, try again." });
+    console.error("search failed", e.details || e.message);
+    res
+      .status(502)
+      .json({ error: "Search failed. Streaming instances busy, try again.", details: e.details });
   }
 });
 
-// GET /api/music/stream/:id  -> direct audio + video URLs and related songs
+const streamCache = new Map();
+const TTL = 20 * 60 * 1000;
+
+// GET /api/music/stream/:id -> playable audio/video URLs + related songs
 router.get("/stream/:id", async (req, res) => {
   const { id } = req.params;
   if (!/^[\w-]{6,15}$/.test(id)) return res.status(400).json({ error: "bad id" });
+  const hit = streamCache.get(id);
+  if (hit && Date.now() - hit.at < TTL) return res.json(hit.data);
   try {
-    const tasks = [
-      ...PIPED.map((base) => async () => {
-        const d = await getJSON(`${base}/streams/${id}`, 10000);
-        const audio = (d.audioStreams || [])
-          .filter((s) => s.url && s.mimeType?.startsWith("audio"))
-          .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-        if (!audio.length) throw new Error("no audio");
-        // lowest-ish bitrate that is still decent saves data
-        const lite = audio.find((s) => s.bitrate <= 130000) || audio[audio.length - 1];
-        const video = (d.videoStreams || []).find(
-          (s) => s.url && !s.videoOnly && s.mimeType?.startsWith("video")
-        );
-        return {
-          audioUrl: lite.url,
-          videoUrl: video?.url || null,
-          related: (d.relatedStreams || [])
-            .filter((r) => r.type === "stream" && r.url)
-            .slice(0, 15)
-            .map((r) => ({
-              id: idFromUrl(r.url),
-              title: r.title,
-              artist: r.uploaderName,
-              thumbnail: r.thumbnail,
-              duration: r.duration,
-            })),
-        };
-      }),
-      ...INVIDIOUS.map((base) => async () => {
-        const d = await getJSON(`${base}/api/v1/videos/${id}`, 10000);
-        const audio = (d.adaptiveFormats || []).filter((f) =>
-          f.type?.startsWith("audio")
-        );
-        if (!audio.length) throw new Error("no audio");
-        audio.sort((a, b) => Number(a.bitrate) - Number(b.bitrate));
-        const muxed = (d.formatStreams || [])[0];
-        return {
-          audioUrl: audio[0].url,
-          videoUrl: muxed?.url || null,
-          related: (d.recommendedVideos || []).slice(0, 15).map((r) => ({
-            id: r.videoId,
-            title: r.title,
-            artist: r.author,
-            thumbnail: r.videoThumbnails?.[3]?.url,
-            duration: r.lengthSeconds,
-          })),
-        };
-      }),
-    ];
-    res.json(await firstOk(tasks));
+    const data = await any(streamTasks(id, await instances()));
+    if (streamCache.size > 200) streamCache.clear();
+    streamCache.set(id, { at: Date.now(), data });
+    res.json(data);
   } catch (e) {
-    res.status(502).json({ error: "Could not get stream. Try another song." });
+    console.error("stream failed", id, e.details || e.message);
+    res.status(502).json({
+      error: "Could not get a playable stream (instances busy or blocked). Try another song.",
+      details: e.details,
+    });
   }
+});
+
+// GET /api/music/debug?id=VIDEO_ID -> shows which instances work from THIS server
+router.get("/debug", async (req, res) => {
+  const id = /^[\w-]{6,15}$/.test(req.query.id || "") ? req.query.id : "jNQXAC9IVRw";
+  const inst = await instances();
+  const results = await Promise.all(
+    streamTasks(id, inst).map(async ([name, fn]) => {
+      const t = Date.now();
+      try {
+        await fn();
+        return { instance: name, ok: true, ms: Date.now() - t };
+      } catch (e) {
+        return { instance: name, ok: false, ms: Date.now() - t, error: e.message };
+      }
+    })
+  );
+  res.json({ videoId: id, instances: inst, results });
 });
 
 export default router;
