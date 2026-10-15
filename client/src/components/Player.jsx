@@ -50,7 +50,13 @@ export default function Player() {
     <div className="full">
       <div className="full-top">
         <button className="icon-btn" onClick={() => p.setExpanded(false)}>⌄</button>
-        <span className="muted">{p.mode === "video" ? "Video mode" : "Audio only (saves data)"}</span>
+        <span className="muted">
+          {p.mode === "video"
+            ? "Video mode"
+            : p.engine === "embed"
+            ? "Audio only (YouTube player)"
+            : "Audio only (saves data)"}
+        </span>
         <span style={{ width: 40 }} />
       </div>
 
@@ -103,7 +109,15 @@ export default function Player() {
         >
           {p.mode === "video" ? "🎧 Switch to audio" : "🎬 Switch to video"}
         </button>
+        <button className="chip" onClick={() => p.setPref(p.pref === "auto" ? "embed" : "auto")}>
+          Engine: {p.pref === "auto" ? "Auto" : "YouTube"}
+        </button>
       </div>
+      {p.engine === "embed" && (
+        <p className="muted small center">
+          Playing via YouTube player. Ads are blocked only if your browser blocks them (e.g. Brave).
+        </p>
+      )}
     </div>
   );
 }
