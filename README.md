@@ -67,4 +67,5 @@ Open the Vercel URL on your phone in Chrome -> menu -> "Install app" / "Add to H
 ## Notes
 
 - Public Piped/Invidious instances go down or get rate limited sometimes. If search or play fails, set your own instances with `PIPED_INSTANCES` / `INVIDIOUS_INSTANCES` env vars on Render (comma separated) or self-host one.
+- Song not playing? Open `<your-backend-url>/api/music/debug` in the browser. It shows which instances work from your server (ok true/false with the error). If all fail, set working instances in `PIPED_INSTANCES` / `INVIDIOUS_INSTANCES`.
 - Streaming from YouTube through third-party front-ends may go against YouTube's Terms of Service. Use for personal or learning purposes.
