@@ -23,7 +23,14 @@ async function getJSON(url, ms = 8000) {
   const t = setTimeout(() => ctrl.abort(), ms);
   try {
     const r = await fetch(url, { signal: ctrl.signal });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    if (!r.ok) {
+      let m = "";
+      try {
+        const j = await r.json();
+        m = typeof j?.error === "string" ? j.error : j?.error?.message || "";
+      } catch {}
+      throw new Error(`HTTP ${r.status}${m ? ": " + String(m).slice(0, 100) : ""}`);
+    }
     return await r.json();
   } finally {
     clearTimeout(t);
@@ -198,54 +205,197 @@ function streamTasks(id, inst) {
 
 /* ---------- routes ---------- */
 
+/* ---------- search (3 tiers, first one that returns results wins) ---------- */
+
+const UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+const thumb = (id) => `https://i.ytimg.com/vi/${id}/mqdefault.jpg`;
+const parseClock = (t = "") => t.split(":").reduce((a, n) => a * 60 + Number(n), 0) || 0;
+const parseISO = (d = "") => {
+  const m = d.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  return m ? (+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + (+m[3] || 0) : 0;
+};
+const decode = (s = "") =>
+  s
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+
+// Tier 1: official YouTube Data API v3 (needs a free YOUTUBE_API_KEY)
+async function searchDataApi(q) {
+  const key = process.env.YOUTUBE_API_KEY;
+  if (!key) throw new Error("YOUTUBE_API_KEY not set");
+  const base = process.env.YT_API_BASE || "https://www.googleapis.com/youtube/v3";
+  const s = await getJSON(
+    `${base}/search?part=snippet&type=video&videoEmbeddable=true&maxResults=20&q=${encodeURIComponent(
+      q
+    )}&key=${key}`
+  );
+  const items = (s.items || []).filter((i) => i.id?.videoId);
+  if (!items.length) throw new Error("no results");
+  const dur = {};
+  try {
+    const v = await getJSON(
+      `${base}/videos?part=contentDetails&id=${items.map((i) => i.id.videoId).join(",")}&key=${key}`
+    );
+    for (const x of v.items || []) dur[x.id] = parseISO(x.contentDetails?.duration);
+  } catch {}
+  return items.map((i) => ({
+    id: i.id.videoId,
+    title: decode(i.snippet?.title),
+    artist: decode(i.snippet?.channelTitle),
+    thumbnail: i.snippet?.thumbnails?.medium?.url || thumb(i.id.videoId),
+    duration: dur[i.id.videoId] || 0,
+  }));
+}
+
+// Tier 2: YouTube's own web search endpoint (no key needed)
+async function searchInnerTube(q) {
+  const url =
+    process.env.INNERTUBE_URL ||
+    "https://www.youtube.com/youtubei/v1/search?prettyPrint=false&key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      signal: ctrl.signal,
+      headers: {
+        "content-type": "application/json",
+        "user-agent": UA,
+        "accept-language": "en-US,en;q=0.9",
+      },
+      body: JSON.stringify({
+        context: {
+          client: {
+            clientName: "WEB",
+            clientVersion: process.env.INNERTUBE_CLIENT_VERSION || "2.20260101.00.00",
+            hl: "en",
+            gl: "IN",
+          },
+        },
+        query: q,
+        params: "EgIQAQ==", // videos only
+      }),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    const sections =
+      d?.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents ||
+      [];
+    const out = [];
+    for (const sec of sections) {
+      for (const it of sec.itemSectionRenderer?.contents || []) {
+        const v = it.videoRenderer;
+        if (!v?.videoId || !v.lengthText?.simpleText) continue; // skip live streams
+        out.push({
+          id: v.videoId,
+          title: (v.title?.runs || []).map((x) => x.text).join(""),
+          artist: v.ownerText?.runs?.[0]?.text || "",
+          thumbnail: thumb(v.videoId),
+          duration: parseClock(v.lengthText.simpleText),
+        });
+      }
+    }
+    if (!out.length) throw new Error("no results (blocked or format changed)");
+    return out;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// Tier 3: Piped / Invidious public instances
+async function searchInstances(q) {
+  const inst = await instances();
+  const tasks = [
+    ...inst.piped.slice(0, 4).map((base) => [
+      base,
+      async () => {
+        const d = await getJSON(`${base}/search?q=${encodeURIComponent(q)}&filter=music_songs`);
+        const items = (d.items || []).filter((i) => i.url?.includes("watch"));
+        if (!items.length) throw new Error("empty");
+        return items.map((i) => ({
+          id: idFromUrl(i.url),
+          title: i.title,
+          artist: i.uploaderName,
+          thumbnail: i.thumbnail,
+          duration: i.duration,
+        }));
+      },
+    ]),
+    ...inst.inv.slice(0, 3).map((base) => [
+      base,
+      async () => {
+        const d = await getJSON(`${base}/api/v1/search?q=${encodeURIComponent(q)}&type=video`);
+        if (!d.length) throw new Error("empty");
+        return d.map((i) => ({
+          id: i.videoId,
+          title: i.title,
+          artist: i.author,
+          thumbnail: i.videoThumbnails?.[3]?.url || i.videoThumbnails?.[0]?.url,
+          duration: i.lengthSeconds,
+        }));
+      },
+    ]),
+  ];
+  return any(tasks);
+}
+
+const SEARCH_TIERS = [
+  ["youtube-api", searchDataApi],
+  ["innertube", searchInnerTube],
+  ["instances", searchInstances],
+];
+
+const errText = (e) => `${e.message}${e.details ? ` [${e.details.slice(0, 3).join(" | ")}]` : ""}`;
+
+async function runSearch(q) {
+  const errors = [];
+  for (const [name, fn] of SEARCH_TIERS) {
+    try {
+      const results = await fn(q);
+      if (results?.length) return { results, source: name };
+    } catch (e) {
+      errors.push(`${name}: ${errText(e)}`);
+    }
+  }
+  const err = new Error("all search tiers failed");
+  err.details = errors;
+  throw err;
+}
+
 // GET /api/music/search?q=...
 router.get("/search", async (req, res) => {
   const q = (req.query.q || "").toString().trim();
   if (!q) return res.json({ results: [] });
   try {
-    const inst = await instances();
-    const tasks = [
-      ...inst.piped.slice(0, 4).map((base) => [
-        base,
-        async () => {
-          const d = await getJSON(
-            `${base}/search?q=${encodeURIComponent(q)}&filter=music_songs`
-          );
-          const items = (d.items || []).filter((i) => i.url?.includes("watch"));
-          if (!items.length) throw new Error("empty");
-          return items.map((i) => ({
-            id: idFromUrl(i.url),
-            title: i.title,
-            artist: i.uploaderName,
-            thumbnail: i.thumbnail,
-            duration: i.duration,
-          }));
-        },
-      ]),
-      ...inst.inv.slice(0, 3).map((base) => [
-        base,
-        async () => {
-          const d = await getJSON(
-            `${base}/api/v1/search?q=${encodeURIComponent(q)}&type=video`
-          );
-          if (!d.length) throw new Error("empty");
-          return d.map((i) => ({
-            id: i.videoId,
-            title: i.title,
-            artist: i.author,
-            thumbnail: i.videoThumbnails?.[3]?.url || i.videoThumbnails?.[0]?.url,
-            duration: i.lengthSeconds,
-          }));
-        },
-      ]),
-    ];
-    res.json({ results: await any(tasks) });
+    const { results, source } = await runSearch(q);
+    res.json({ results, source });
   } catch (e) {
-    console.error("search failed", e.details || e.message);
-    res
-      .status(502)
-      .json({ error: "Search failed. Streaming instances busy, try again.", details: e.details });
+    console.error("search failed", e.details);
+    res.status(502).json({
+      error: "Search failed. Set YOUTUBE_API_KEY on the server (see README) or try again.",
+      details: e.details,
+    });
   }
+});
+
+// GET /api/music/debug/search?q=... -> shows what each search tier returns on THIS server
+router.get("/debug/search", async (req, res) => {
+  const q = (req.query.q || "arijit singh").toString();
+  const out = [];
+  for (const [name, fn] of SEARCH_TIERS) {
+    const t = Date.now();
+    try {
+      const r = await fn(q);
+      out.push({ tier: name, ok: true, count: r.length, ms: Date.now() - t });
+    } catch (e) {
+      out.push({ tier: name, ok: false, ms: Date.now() - t, error: errText(e) });
+    }
+  }
+  res.json({ query: q, hasApiKey: !!process.env.YOUTUBE_API_KEY, tiers: out });
 });
 
 const streamCache = new Map();

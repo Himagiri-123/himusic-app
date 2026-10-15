@@ -60,6 +60,17 @@ Free Render services sleep after inactivity, so the first request can take ~30s.
 3. Environment variable: `VITE_API_URL` = your Render URL (no trailing slash).
 4. Deploy. Then go back to Render and set `CLIENT_ORIGIN` to the Vercel URL and redeploy.
 
+## Reliable search (YouTube Data API key, free)
+
+Search tries 3 ways in order: official YouTube Data API (needs key) -> YouTube web search (no key) -> Piped/Invidious instances. The key makes search stable, so set it.
+
+1. Go to https://console.cloud.google.com -> create a project.
+2. APIs & Services -> Library -> "YouTube Data API v3" -> Enable.
+3. APIs & Services -> Credentials -> Create credentials -> API key (restrict it to YouTube Data API v3).
+4. Put it in `server/.env` as `YOUTUBE_API_KEY=...` and in Render -> Environment.
+
+Free quota is 10,000 units/day, about 100 searches per day (each search costs ~101 units). Check what works on your server: `<backend-url>/api/music/debug/search?q=arijit`.
+
 ## Install as app
 
 Open the Vercel URL on your phone in Chrome -> menu -> "Install app" / "Add to Home screen".
