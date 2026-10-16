@@ -2,7 +2,14 @@
 
 Ad-free music player (React PWA + Node/Express + MongoDB). Streams audio through open-source Piped/Invidious APIs, so there are no YouTube ads and audio-only mode saves data.
 
-Features: search, audio-only mode, audio/video toggle, mini player + full player, background play (Media Session), autoplay next (related songs), recently played, liked songs, custom playlists, dark/light mode, installable PWA.
+Features (Spotify-style UI: black #121212, green #1DB954):
+- Home: time greeting, 6 recent boxes, horizontal rows (Trending, Made for You, Top Telugu, Popular Artists...), dynamic cover-color gradients
+- Search: live results + suggestions while typing, artists (round photos) + songs, browse categories (Genres, Moods, Podcasts, Devotional...)
+- Player: mini player (heart + play/pause) and full-screen player with shuffle, repeat (all/one), seekbar, Up Next queue, synced lyrics (LRCLIB), audio-only / video toggle
+- Library: Liked Songs, Recently played, custom playlists with your own photo and name, artist pages
+- System: JWT login, lock-screen controls (Media Session), background play, near-gapless next song (pre-buffering), Back button closes player/pages
+- PWA: install prompt, offline app shell + seen cover photos + last home rows + library
+- Desktop: bottom bar becomes a left sidebar on wide screens
 
 ```
 himusic/
@@ -70,6 +77,13 @@ Search tries 3 ways in order: official YouTube Data API (needs key) -> YouTube w
 4. Put it in `server/.env` as `YOUTUBE_API_KEY=...` and in Render -> Environment.
 
 Free quota is 10,000 units/day, about 100 searches per day (each search costs ~101 units). Check what works on your server: `<backend-url>/api/music/debug/search?q=arijit`.
+
+## Notes on the new features
+
+- Instant search: suggestions are free, but each search can use YouTube Data API quota (about 100 searches/day on the free key). Results are cached 10 min on the server, and it falls back to YouTube web search when quota ends.
+- Lyrics come from LRCLIB (free). Many Telugu songs are not in it yet, the app then shows "No lyrics found".
+- Gapless is best-effort: the next song is pre-buffered in a second player. It is not sample-accurate and does not apply in the YouTube-player fallback.
+- Offline: the app, cover photos you have seen, last home rows and your library work offline. Songs themselves need internet.
 
 ## Install as app
 

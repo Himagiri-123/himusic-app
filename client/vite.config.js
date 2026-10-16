@@ -12,23 +12,44 @@ export default defineConfig({
         name: "HiMusic",
         short_name: "HiMusic",
         description: "Ad-free music player with audio-only mode",
-        theme_color: "#0f0f14",
-        background_color: "#0f0f14",
+        theme_color: "#121212",
+        background_color: "#121212",
         display: "standalone",
         orientation: "portrait",
         start_url: "/",
+        categories: ["music", "entertainment"],
         icons: [
           { src: "pwa-192x192.png", sizes: "192x192", type: "image/png" },
           { src: "pwa-512x512.png", sizes: "512x512", type: "image/png" },
+          { src: "pwa-512x512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+        ],
+      },
+      workbox: {
+        navigateFallbackDenylist: [/^\/api/],
+        runtimeCaching: [
+          // cover photos: once seen, they show even when offline / slow
           {
-            src: "pwa-512x512.png",
-            sizes: "512x512",
-            type: "image/png",
-            purpose: "maskable",
+            urlPattern: ({ request }) => request.destination === "image",
+            handler: "CacheFirst",
+            options: {
+              cacheName: "hm-images",
+              expiration: { maxEntries: 400, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          // public music data only (never the user's library or stream URLs)
+          {
+            urlPattern: ({ url }) => /\/api\/music\/(home|search|artists|suggest|lyrics)/.test(url.pathname),
+            handler: "NetworkFirst",
+            options: {
+              cacheName: "hm-api",
+              networkTimeoutSeconds: 5,
+              expiration: { maxEntries: 120, maxAgeSeconds: 60 * 60 * 24 * 7 },
+              cacheableResponse: { statuses: [200] },
+            },
           },
         ],
       },
-      workbox: { navigateFallbackDenylist: [/^\/api/] },
     }),
   ],
 });

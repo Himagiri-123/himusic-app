@@ -22,18 +22,27 @@ async function request(path, { method = "GET", body } = {}) {
   return data;
 }
 
+const enc = encodeURIComponent;
+
 export const api = {
   register: (b) => request("/api/auth/register", { method: "POST", body: b }),
   login: (b) => request("/api/auth/login", { method: "POST", body: b }),
-  search: (q) => request(`/api/music/search?q=${encodeURIComponent(q)}`),
+
+  search: (q) => request(`/api/music/search?q=${enc(q)}`),
+  artists: (q) => request(`/api/music/artists?q=${enc(q)}`),
+  suggest: (q) => request(`/api/music/suggest?q=${enc(q)}`),
+  home: (artist) => request(`/api/music/home${artist ? `?artist=${enc(artist)}` : ""}`),
   stream: (id) => request(`/api/music/stream/${id}`),
+  lyrics: (s) =>
+    request(`/api/music/lyrics?title=${enc(s.title || "")}&artist=${enc(s.artist || "")}&duration=${Math.round(s.duration || 0)}`),
+
   library: () => request("/api/library"),
   like: (song) => request("/api/library/like", { method: "POST", body: song }),
   addHistory: (song) => request("/api/library/history", { method: "POST", body: song }),
-  createPlaylist: (name) => request("/api/library/playlists", { method: "POST", body: { name } }),
+  createPlaylist: (name, cover = "") =>
+    request("/api/library/playlists", { method: "POST", body: { name, cover } }),
+  updatePlaylist: (id, patch) => request(`/api/library/playlists/${id}`, { method: "PATCH", body: patch }),
   deletePlaylist: (id) => request(`/api/library/playlists/${id}`, { method: "DELETE" }),
-  addToPlaylist: (id, song) =>
-    request(`/api/library/playlists/${id}/songs`, { method: "POST", body: song }),
-  removeFromPlaylist: (id, sid) =>
-    request(`/api/library/playlists/${id}/songs/${sid}`, { method: "DELETE" }),
+  addToPlaylist: (id, song) => request(`/api/library/playlists/${id}/songs`, { method: "POST", body: song }),
+  removeFromPlaylist: (id, sid) => request(`/api/library/playlists/${id}/songs/${sid}`, { method: "DELETE" }),
 };

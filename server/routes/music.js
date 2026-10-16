@@ -18,11 +18,11 @@ const list = (v) =>
     .filter(Boolean);
 const uniq = (a) => [...new Set(a)];
 
-async function getJSON(url, ms = 8000) {
+async function getJSON(url, ms = 8000, headers) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
   try {
-    const r = await fetch(url, { signal: ctrl.signal });
+    const r = await fetch(url, { signal: ctrl.signal, headers });
     if (!r.ok) {
       let m = "";
       try {
@@ -343,27 +343,50 @@ async function searchInstances(q) {
   return any(tasks);
 }
 
+// Free tiers first so the YouTube API quota is only spent when they fail.
 const SEARCH_TIERS = [
-  ["youtube-api", searchDataApi],
   ["innertube", searchInnerTube],
+  ["youtube-api", searchDataApi],
   ["instances", searchInstances],
 ];
 
 const errText = (e) => `${e.message}${e.details ? ` [${e.details.slice(0, 3).join(" | ")}]` : ""}`;
 
+// tiny in-memory TTL cache (saves quota + makes repeat searches instant)
+const memo = new Map();
+async function cached(key, ttl, fn) {
+  const hit = memo.get(key);
+  if (hit && Date.now() - hit.at < ttl) return hit.v;
+  const v = await fn();
+  if (memo.size > 600) memo.clear();
+  memo.set(key, { at: Date.now(), v });
+  return v;
+}
+
+// a tier that just failed is skipped for 3 minutes so typing stays fast
+const tierDownAt = {};
+
 async function runSearch(q) {
-  const errors = [];
-  for (const [name, fn] of SEARCH_TIERS) {
-    try {
-      const results = await fn(q);
-      if (results?.length) return { results, source: name };
-    } catch (e) {
-      errors.push(`${name}: ${errText(e)}`);
+  return cached(`s:${q.toLowerCase()}`, 60 * 60 * 1000, async () => {
+    const errors = [];
+    let tiers = SEARCH_TIERS.filter(([n]) => !(tierDownAt[n] && Date.now() - tierDownAt[n] < 3 * 60 * 1000));
+    if (!tiers.length) tiers = SEARCH_TIERS;
+    for (const [name, fn] of tiers) {
+      try {
+        const results = await fn(q);
+        if (results?.length) {
+          delete tierDownAt[name];
+          return { results, source: name };
+        }
+      } catch (e) {
+        tierDownAt[name] = Date.now();
+        errors.push(`${name}: ${errText(e)}`);
+      }
     }
-  }
-  const err = new Error("all search tiers failed");
-  err.details = errors;
-  throw err;
+    const err = new Error("all search tiers failed");
+    err.details = errors;
+    throw err;
+  });
 }
 
 // GET /api/music/search?q=...
@@ -437,6 +460,207 @@ router.get("/debug", async (req, res) => {
     })
   );
   res.json({ videoId: id, instances: inst, results });
+});
+
+/* ---------- artists ---------- */
+
+async function innerTubePost(q, params) {
+  const url =
+    process.env.INNERTUBE_URL ||
+    "https://www.youtube.com/youtubei/v1/search?prettyPrint=false&key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      signal: ctrl.signal,
+      headers: { "content-type": "application/json", "user-agent": UA, "accept-language": "en-US,en;q=0.9" },
+      body: JSON.stringify({
+        context: {
+          client: {
+            clientName: "WEB",
+            clientVersion: process.env.INNERTUBE_CLIENT_VERSION || "2.20260101.00.00",
+            hl: "en",
+            gl: "IN",
+          },
+        },
+        query: q,
+        params,
+      }),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return await r.json();
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+const fixImg = (u = "") => (u.startsWith("//") ? "https:" + u : u);
+
+async function artistsInnerTube(q) {
+  const d = await innerTubePost(q, "EgIQAg=="); // channels only
+  const sections =
+    d?.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents || [];
+  const out = [];
+  for (const sec of sections) {
+    for (const it of sec.itemSectionRenderer?.contents || []) {
+      const c = it.channelRenderer;
+      if (!c?.channelId) continue;
+      const th = c.thumbnail?.thumbnails || [];
+      out.push({
+        id: c.channelId,
+        name: c.title?.simpleText || c.title?.runs?.[0]?.text || "",
+        thumbnail: fixImg(th[th.length - 1]?.url),
+      });
+    }
+  }
+  if (!out.length) throw new Error("no artists");
+  return out.slice(0, 10);
+}
+
+async function artistsDataApi(q) {
+  const key = process.env.YOUTUBE_API_KEY;
+  if (!key) throw new Error("YOUTUBE_API_KEY not set");
+  const base = process.env.YT_API_BASE || "https://www.googleapis.com/youtube/v3";
+  const s = await getJSON(
+    `${base}/search?part=snippet&type=channel&maxResults=8&q=${encodeURIComponent(q)}&key=${key}`
+  );
+  const out = (s.items || [])
+    .filter((i) => i.id?.channelId)
+    .map((i) => ({
+      id: i.id.channelId,
+      name: decode(i.snippet?.title),
+      thumbnail: fixImg(i.snippet?.thumbnails?.medium?.url || i.snippet?.thumbnails?.default?.url),
+    }));
+  if (!out.length) throw new Error("no artists");
+  return out;
+}
+
+function searchArtists(q, { noApi = false } = {}) {
+  return cached(`a:${q.toLowerCase()}`, 24 * 60 * 60 * 1000, async () => {
+    try {
+      return await artistsInnerTube(q);
+    } catch (e) {
+      if (noApi || !process.env.YOUTUBE_API_KEY) throw e;
+      return await artistsDataApi(q);
+    }
+  });
+}
+
+// GET /api/music/artists?q=...
+router.get("/artists", async (req, res) => {
+  const q = (req.query.q || "").toString().trim();
+  if (!q) return res.json({ results: [] });
+  try {
+    res.json({ results: await searchArtists(q) });
+  } catch (e) {
+    res.json({ results: [], error: e.message });
+  }
+});
+
+/* ---------- autocomplete ---------- */
+
+// GET /api/music/suggest?q=...
+router.get("/suggest", async (req, res) => {
+  const q = (req.query.q || "").toString().trim();
+  if (!q) return res.json({ suggestions: [] });
+  try {
+    const suggestions = await cached(`g:${q.toLowerCase()}`, 10 * 60 * 1000, async () => {
+      const base = process.env.SUGGEST_URL || "https://suggestqueries.google.com/complete/search";
+      const d = await getJSON(`${base}?client=firefox&ds=yt&hl=en&q=${encodeURIComponent(q)}`, 3000);
+      return (d[1] || []).slice(0, 8);
+    });
+    res.json({ suggestions });
+  } catch {
+    res.json({ suggestions: [] });
+  }
+});
+
+/* ---------- home rows ---------- */
+
+const TOP_ARTISTS = [
+  "Sid Sriram",
+  "Anirudh Ravichander",
+  "Arijit Singh",
+  "A. R. Rahman",
+  "Devi Sri Prasad",
+  "Shreya Ghoshal",
+  "S. P. Balasubrahmanyam",
+  "Thaman S",
+];
+
+// GET /api/music/home?artist=NAME
+router.get("/home", async (req, res) => {
+  const artist = (req.query.artist || "").toString().trim().slice(0, 80);
+  const jobs = [
+    ["trending", "Trending Hits", "trending songs india"],
+    ["made", "Made for You", artist ? `${artist} songs` : "chill telugu songs"],
+    ["telugu", "Top Telugu", "top telugu songs"],
+    ["devotional", "Devotional", "telugu devotional songs"],
+    ["hindi", "Hindi Hits", "latest hindi songs"],
+  ];
+  const rows = (
+    await Promise.all(
+      jobs.map(async ([id, title, q]) => {
+        try {
+          const r = await runSearch(q);
+          return { id, title, type: "songs", items: r.results.slice(0, 15) };
+        } catch {
+          return null;
+        }
+      })
+    )
+  ).filter(Boolean);
+
+  try {
+    const items = await cached("top-artists", 24 * 60 * 60 * 1000, async () => {
+      const found = (
+        await Promise.all(TOP_ARTISTS.map((n) => searchArtists(n, { noApi: true }).then((a) => a[0]).catch(() => null)))
+      ).filter(Boolean);
+      if (!found.length) throw new Error("none");
+      return found;
+    });
+    rows.splice(Math.min(3, rows.length), 0, { id: "artists", title: "Popular Artists", type: "artists", items });
+  } catch {}
+
+  res.json({ rows });
+});
+
+/* ---------- lyrics (LRCLIB, free, no key) ---------- */
+
+const cleanTitle = (t = "") =>
+  t
+    .split("|")[0]
+    .replace(/[([][^)\]]*[)\]]/g, "")
+    .replace(/\b(official|video|lyrical|lyric|lyrics|full|song|audio|hd|4k|hq|with|music)\b/gi, "")
+    .replace(/[-–—]\s*$/, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+// GET /api/music/lyrics?title=&artist=&duration=
+router.get("/lyrics", async (req, res) => {
+  const title = (req.query.title || "").toString();
+  const duration = Number(req.query.duration) || 0;
+  const q = cleanTitle(title);
+  if (!q) return res.json({ synced: null, plain: null });
+  try {
+    const out = await cached(`l:${q.toLowerCase()}:${duration}`, 24 * 60 * 60 * 1000, async () => {
+      const base = process.env.LRCLIB_URL || "https://lrclib.net";
+      const list = await getJSON(`${base}/api/search?q=${encodeURIComponent(q)}`, 7000, {
+        "user-agent": "HiMusic/1.0",
+      });
+      const ok = (Array.isArray(list) ? list : []).filter((x) => x.syncedLyrics || x.plainLyrics);
+      const near = duration ? ok.filter((x) => Math.abs((x.duration || 0) - duration) <= 10) : ok;
+      const pool = near.length ? near : duration ? [] : ok;
+      const pick = pool.find((x) => x.syncedLyrics) || pool[0];
+      return pick
+        ? { synced: pick.syncedLyrics || null, plain: pick.plainLyrics || null, title: pick.trackName, artist: pick.artistName }
+        : { synced: null, plain: null };
+    });
+    res.json(out);
+  } catch {
+    res.json({ synced: null, plain: null });
+  }
 });
 
 export default router;

@@ -13,6 +13,7 @@ const songSchema = new mongoose.Schema(
 
 const playlistSchema = new mongoose.Schema({
   name: { type: String, required: true },
+  cover: { type: String, default: "" },
   songs: [songSchema],
 });
 

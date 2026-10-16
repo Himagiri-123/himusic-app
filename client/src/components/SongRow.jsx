@@ -1,35 +1,33 @@
 import { useApp } from "../store.jsx";
 import { usePlayer } from "../PlayerContext.jsx";
+import { cleanArtist } from "../hooks.js";
+import Cover from "./Cover.jsx";
+import Icon from "./Icon.jsx";
 
 export default function SongRow({ song, list, onRemove }) {
-  const { isLiked, toggleLike, setPicker } = useApp();
+  const { isLiked, toggleLike, setMenu } = useApp();
   const { play, current, playing } = usePlayer();
   const active = current?.id === song.id;
+  const liked = isLiked(song.id);
 
   return (
-    <div className={"row" + (active ? " active" : "")}>
-      <button className="row-main" onClick={() => play(song, list)}>
-        <img src={song.thumbnail} alt="" loading="lazy" />
+    <div className={"song-row" + (active ? " active" : "")}>
+      <button className="song-main" onClick={() => play(song, list || [song])}>
+        <Cover src={song.thumbnail} size={48} />
         <div className="meta">
           <div className="title">{song.title}</div>
-          <div className="artist">
-            {active && playing ? "▶ Playing · " : ""}
-            {song.artist}
+          <div className="sub">
+            {active && playing && <span className="eq" aria-hidden="true"><i /><i /><i /></span>}
+            {cleanArtist(song.artist)}
           </div>
         </div>
       </button>
-      <button
-        className={"icon-btn" + (isLiked(song.id) ? " liked" : "")}
-        onClick={() => toggleLike(song)}
-        title="Like"
-      >
-        {isLiked(song.id) ? "♥" : "♡"}
+      <button className={"ic" + (liked ? " on" : "")} onClick={() => toggleLike(song)} aria-label="Like">
+        <Icon name={liked ? "heartFill" : "heart"} size={22} />
       </button>
-      {onRemove ? (
-        <button className="icon-btn" onClick={() => onRemove(song)} title="Remove">✕</button>
-      ) : (
-        <button className="icon-btn" onClick={() => setPicker(song)} title="Add to playlist">＋</button>
-      )}
+      <button className="ic" onClick={() => setMenu({ song, onRemove })} aria-label="More">
+        <Icon name="more" size={22} />
+      </button>
     </div>
   );
 }

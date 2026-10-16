@@ -41,11 +41,33 @@ router.post("/history", async (req, res) => {
 });
 
 // Playlists
+const validCover = (c) => typeof c === "string" && (c === "" || (c.startsWith("data:image/") && c.length < 300000));
+
 router.post("/playlists", async (req, res) => {
-  const name = (req.body.name || "").trim();
+  const name = (req.body.name || "").trim().slice(0, 80);
   if (!name) return res.status(400).json({ error: "name required" });
+  const cover = req.body.cover || "";
+  if (!validCover(cover)) return res.status(400).json({ error: "invalid cover image" });
   const u = await User.findById(req.userId);
-  u.playlists.push({ name, songs: [] });
+  u.playlists.push({ name, cover, songs: [] });
+  await u.save();
+  res.json({ playlists: u.playlists });
+});
+
+// rename and/or change cover photo
+router.patch("/playlists/:pid", async (req, res) => {
+  const u = await User.findById(req.userId);
+  const p = u.playlists.id(req.params.pid);
+  if (!p) return res.status(404).json({ error: "playlist not found" });
+  if (req.body.name !== undefined) {
+    const name = String(req.body.name).trim().slice(0, 80);
+    if (!name) return res.status(400).json({ error: "name required" });
+    p.name = name;
+  }
+  if (req.body.cover !== undefined) {
+    if (!validCover(req.body.cover)) return res.status(400).json({ error: "invalid cover image" });
+    p.cover = req.body.cover;
+  }
   await u.save();
   res.json({ playlists: u.playlists });
 });

@@ -1,108 +1,63 @@
-import { useState } from "react";
 import { useApp } from "../store.jsx";
-import SongRow from "./SongRow.jsx";
+import { useNav } from "../nav.jsx";
+import Cover from "./Cover.jsx";
+import Icon from "./Icon.jsx";
 
 export default function Library() {
-  const { lib, createPlaylist, deletePlaylist, removeFromPlaylist } = useApp();
-  const [tab, setTab] = useState("liked");
-  const [openId, setOpenId] = useState(null);
-  const [name, setName] = useState("");
-
-  const open = lib.playlists.find((p) => p._id === openId);
-
-  const add = async (e) => {
-    e.preventDefault();
-    if (!name.trim()) return;
-    await createPlaylist(name.trim());
-    setName("");
-  };
+  const { lib, setEditor, user } = useApp();
+  const nav = useNav();
 
   return (
-    <div>
-      <div className="tabs">
-        {[
-          ["liked", "Liked"],
-          ["history", "Recent"],
-          ["playlists", "Playlists"],
-        ].map(([k, label]) => (
-          <button
-            key={k}
-            className={tab === k ? "on" : ""}
-            onClick={() => {
-              setTab(k);
-              setOpenId(null);
-            }}
-          >
-            {label}
+    <div className="page">
+      <header className="page-head">
+        <div className="head-left">
+          <div className="avatar small">{(user?.name || "U").trim()[0].toUpperCase()}</div>
+          <h1>Your Library</h1>
+        </div>
+        <button className="ic big" onClick={() => setEditor({})} aria-label="Create playlist">
+          <Icon name="plus" size={28} />
+        </button>
+      </header>
+
+      <div className="list">
+        <button className="lib-row" onClick={() => nav.push({ type: "liked" })}>
+          <div className="cover liked-cover" style={{ width: 56, height: 56 }}>
+            <Icon name="heartFill" size={26} />
+          </div>
+          <div className="meta">
+            <div className="title">Liked Songs</div>
+            <div className="sub">Playlist · {lib.liked.length} songs</div>
+          </div>
+        </button>
+
+        <button className="lib-row" onClick={() => nav.push({ type: "history" })}>
+          <Cover src={lib.history[0]?.thumbnail} size={56} icon="library" />
+          <div className="meta">
+            <div className="title">Recently played</div>
+            <div className="sub">History · {lib.history.length} songs</div>
+          </div>
+        </button>
+
+        {lib.playlists.map((p) => (
+          <button key={p._id} className="lib-row" onClick={() => nav.push({ type: "playlist", id: p._id })}>
+            <Cover src={p.cover || p.songs[0]?.thumbnail} size={56} icon="library" />
+            <div className="meta">
+              <div className="title">{p.name}</div>
+              <div className="sub">Playlist · {p.songs.length} songs</div>
+            </div>
           </button>
         ))}
+
+        <button className="lib-row" onClick={() => setEditor({})}>
+          <div className="cover add-cover" style={{ width: 56, height: 56 }}>
+            <Icon name="plus" size={28} />
+          </div>
+          <div className="meta">
+            <div className="title">Create playlist</div>
+            <div className="sub">Give it a name and a photo</div>
+          </div>
+        </button>
       </div>
-
-      {tab === "liked" && (
-        <section>
-          {lib.liked.length === 0 && <p className="muted center">No liked songs yet</p>}
-          {lib.liked.map((s) => (
-            <SongRow key={s.id} song={s} list={lib.liked} />
-          ))}
-        </section>
-      )}
-
-      {tab === "history" && (
-        <section>
-          {lib.history.length === 0 && <p className="muted center">Nothing played yet</p>}
-          {lib.history.map((s) => (
-            <SongRow key={s.id} song={s} list={lib.history} />
-          ))}
-        </section>
-      )}
-
-      {tab === "playlists" && !open && (
-        <section>
-          <form className="search" onSubmit={add}>
-            <input
-              placeholder="New playlist name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-            <button className="primary">Create</button>
-          </form>
-          {lib.playlists.length === 0 && <p className="muted center">No playlists yet</p>}
-          {lib.playlists.map((p) => (
-            <div key={p._id} className="row">
-              <button className="row-main" onClick={() => setOpenId(p._id)}>
-                <div className="pl-cover">♪</div>
-                <div className="meta">
-                  <div className="title">{p.name}</div>
-                  <div className="artist">{p.songs.length} songs</div>
-                </div>
-              </button>
-              <button
-                className="icon-btn"
-                title="Delete playlist"
-                onClick={() => confirm(`Delete "${p.name}"?`) && deletePlaylist(p._id)}
-              >
-                🗑
-              </button>
-            </div>
-          ))}
-        </section>
-      )}
-
-      {tab === "playlists" && open && (
-        <section>
-          <button className="link" onClick={() => setOpenId(null)}>← All playlists</button>
-          <h2>{open.name}</h2>
-          {open.songs.length === 0 && <p className="muted center">Empty. Add songs using ＋ in search.</p>}
-          {open.songs.map((s) => (
-            <SongRow
-              key={s.id}
-              song={s}
-              list={open.songs}
-              onRemove={(song) => removeFromPlaylist(open._id, song.id)}
-            />
-          ))}
-        </section>
-      )}
     </div>
   );
 }
