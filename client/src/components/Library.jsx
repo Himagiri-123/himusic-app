@@ -1,11 +1,13 @@
 import { useApp } from "../store.jsx";
 import { useNav } from "../nav.jsx";
+import { useDownloads } from "../downloads.jsx";
 import Cover from "./Cover.jsx";
 import Icon from "./Icon.jsx";
 
 export default function Library() {
   const { lib, setEditor, user } = useApp();
   const nav = useNav();
+  const dl = useDownloads();
 
   return (
     <div className="page">
@@ -35,6 +37,16 @@ export default function Library() {
           <div className="meta">
             <div className="title">Recently played</div>
             <div className="sub">History · {lib.history.length} songs</div>
+          </div>
+        </button>
+
+        <button className="lib-row" onClick={() => nav.push({ type: "downloads" })}>
+          <div className="cover dl-cover" style={{ width: 56, height: 56 }}>
+            <Icon name="downloaded" size={28} />
+          </div>
+          <div className="meta">
+            <div className="title">Downloaded</div>
+            <div className="sub">Offline · {dl.items.length} songs · {(dl.bytes / 1048576).toFixed(0)} MB</div>
           </div>
         </button>
 

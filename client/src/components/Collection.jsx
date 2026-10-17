@@ -3,6 +3,7 @@ import { api } from "../api";
 import { useApp } from "../store.jsx";
 import { usePlayer } from "../PlayerContext.jsx";
 import { useNav } from "../nav.jsx";
+import { useDownloads } from "../downloads.jsx";
 import { cleanArtist, rgb, useDominantColor } from "../hooks.js";
 import Cover from "./Cover.jsx";
 import Icon from "./Icon.jsx";
@@ -13,6 +14,7 @@ export default function Collection({ view }) {
   const { lib, setEditor, deletePlaylist, removeFromPlaylist } = useApp();
   const { playAll } = usePlayer();
   const nav = useNav();
+  const dl = useDownloads();
   const [artistSongs, setArtistSongs] = useState(null);
   const [artistErr, setArtistErr] = useState("");
 
@@ -47,6 +49,11 @@ export default function Collection({ view }) {
     kind = "History";
     songs = lib.history;
     cover = lib.history[0]?.thumbnail;
+  } else if (view.type === "downloads") {
+    title = "Downloaded";
+    kind = "Offline";
+    songs = dl.songs;
+    cover = dl.songs[0]?.thumbnail;
   } else if (view.type === "playlist") {
     title = playlist?.name || "Playlist";
     kind = "Playlist";
@@ -103,6 +110,11 @@ export default function Collection({ view }) {
         <button className={"ic" + (false ? " on" : "")} onClick={() => playAll(songs, { shuffled: true })} disabled={!songs.length} aria-label="Shuffle play">
           <Icon name="shuffle" size={28} />
         </button>
+        {view.type !== "downloads" && songs.length > 0 && (
+          <button className="ic" onClick={() => dl.downloadMany(songs)} aria-label="Download all">
+            <Icon name="download" size={28} />
+          </button>
+        )}
         {playlist && (
           <>
             <button className="ic" onClick={() => setEditor({ playlist })} aria-label="Edit playlist">
@@ -123,7 +135,9 @@ export default function Collection({ view }) {
       {artistErr && <div className="error pad">{artistErr}</div>}
       {songs.length === 0 && (view.type !== "artist" || artistSongs) && !artistErr && (
         <p className="sub center pad">
-          {view.type === "liked"
+          {view.type === "downloads"
+            ? "Use the ⋯ menu on any song and pick Download for offline."
+            : view.type === "liked"
             ? "Tap the heart on any song to save it here."
             : view.type === "playlist"
             ? "Empty. Add songs from the ⋯ menu on any song."

@@ -85,6 +85,20 @@ Free quota is 10,000 units/day, about 100 searches per day (each search costs ~1
 - Gapless is best-effort: the next song is pre-buffered in a second player. It is not sample-accurate and does not apply in the YouTube-player fallback.
 - Offline: the app, cover photos you have seen, last home rows and your library work offline. Songs themselves need internet.
 
+## Login security (Gmail OTP)
+- Sign-up needs a Gmail address and a 6-digit code emailed to it; the account is only created after the code is confirmed. Accounts are saved in MongoDB, so every user gets their own liked songs, playlists and history.
+- Passwords are hashed (bcrypt), codes expire in 10 minutes, wrong tries/logins are rate limited, "Forgot password" works by code too.
+- To stop other people using your app: set `ALLOWED_EMAILS=you@gmail.com,...` on Render (only those can sign up), then optionally keep it.
+- Email sending (pick one in Render env vars): **Brevo** (`BREVO_API_KEY`, `MAIL_FROM`) or the **Google Apps Script relay** (`server/mail-relay.gs`, steps inside). Render free blocks normal SMTP.
+- `JWT_SECRET` must be set (32+ random characters) or the server will not start.
+
+## Background / lock-screen play
+The server now has its own audio engine (yt-dlp, downloaded automatically on first use) and streams audio to a normal `<audio>` player, so the notification bar / lock screen controls work. Check it at `/api/music/debug/ytdlp`. If YouTube blocks Render's IP it shows an error there; then set `YT_COOKIES` or `YTDLP_PROXY` (see `.env.example`).
+On **OriginOS / Funtouch (vivo)**: Settings → Battery → Background power consumption → HiMusic → *Allow*; also lock the app in Recents and enable *Auto-start*. Install the app as a PWA (Add to Home screen) for best results.
+
+## Offline downloads
+Song menu (⋯) → *Download for offline*, or the download button in the player / on a playlist (*download all*). Files are stored inside the app (browser storage) per user, listed in Your Library → *Downloaded*, and play with no internet. They do not appear in the phone gallery/files app, and clearing browser data or logging out on another account removes access.
+
 ## Install as app
 
 Open the Vercel URL on your phone in Chrome -> menu -> "Install app" / "Add to Home screen".

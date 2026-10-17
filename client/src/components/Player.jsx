@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { usePlayer } from "../PlayerContext.jsx";
 import { useApp } from "../store.jsx";
+import { useDownloads } from "../downloads.jsx";
 import { cleanArtist, fmt, rgb, useDominantColor } from "../hooks.js";
 import Cover from "./Cover.jsx";
 import Icon from "./Icon.jsx";
@@ -127,6 +128,7 @@ function QueueView({ p }) {
 export default function Player() {
   const p = usePlayer();
   const { isLiked, toggleLike, setMenu } = useApp();
+  const dl = useDownloads();
   const { current } = p;
   const [view, setView] = useState("main"); // main | queue | lyrics
   const col = useDominantColor(current?.thumbnail, current?.id || "x");
@@ -175,7 +177,7 @@ export default function Player() {
     );
   }
 
-  const modeLabel = p.mode === "video" ? "Video" : p.engine === "embed" ? "Audio · YouTube player" : "Audio only · saves data";
+  const modeLabel = p.mode === "video" ? "Video" : "Audio only · saves data";
   const title = view === "queue" ? "Queue" : view === "lyrics" ? "Lyrics" : "Now playing";
 
   return (
@@ -256,10 +258,20 @@ export default function Player() {
             <button className="pill" onClick={p.toggleMode} disabled={!p.hasVideo && p.mode === "audio"}>
               <Icon name="video" size={18} /> {p.mode === "video" ? "Audio only" : "Watch video"}
             </button>
-            <button className="pill" onClick={() => p.setPref(p.pref === "auto" ? "embed" : "auto")}>
-              Engine: {p.pref === "auto" ? "Auto" : "YouTube"}
-            </button>
             <span className="grow" />
+            {p.current && (
+              <button
+                className={"ic" + (dl.isDownloaded(p.current.id) ? " on" : "")}
+                onClick={() => (dl.isDownloaded(p.current.id) ? dl.remove(p.current) : dl.download(p.current))}
+                aria-label={dl.isDownloaded(p.current.id) ? "Remove download" : "Download for offline"}
+              >
+                {dl.progress[p.current.id] != null ? (
+                  <span className="dl-pct big">{Math.round(dl.progress[p.current.id] * 100)}%</span>
+                ) : (
+                  <Icon name={dl.isDownloaded(p.current.id) ? "downloaded" : "download"} size={24} />
+                )}
+              </button>
+            )}
             <button
               className={"ic" + (view === "lyrics" ? " on" : "")}
               onClick={() => setView(view === "lyrics" ? "main" : "lyrics")}
@@ -277,9 +289,7 @@ export default function Player() {
               <Icon name="queue" size={24} />
             </button>
           </div>
-          {p.engine === "embed" && (
-            <p className="sub small center">Playing via the YouTube player. Ads are blocked only if your browser blocks them (e.g. Brave).</p>
-          )}
+          {/* Note: when engine === "embed" the YouTube player is used; ads are only blocked if the browser blocks them (e.g. Brave). */}
         </div>
       </div>
     </div>

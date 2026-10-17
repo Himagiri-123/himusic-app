@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { useApp } from "./store.jsx";
+import { useDownloads } from "./downloads.jsx";
 import { SILENT_WAV } from "./silent.js";
 import { pushEntry, goBack } from "./historyStack.js";
 
@@ -80,6 +81,9 @@ export function PlayerProvider({ children }) {
   const expandedRef = useRef(false);
   const currentRef = useRef(null);
   const lastPos = useRef(0);
+  const dl = useDownloads();
+  const getLocalRef = useRef(null);
+  getLocalRef.current = dl?.getUrl;
 
   const [current, setCurrent] = useState(null);
   const [mode, setModeState] = useState("audio");
@@ -254,6 +258,31 @@ export function PlayerProvider({ children }) {
         setLoading(false);
         return;
       }
+
+      // saved for offline? play the local copy (works with no internet)
+      try {
+        const local = await getLocalRef.current?.(song.id);
+        if (token !== loadToken.current) return;
+        if (local) {
+          const s = { audioUrl: local, videoUrl: null, related: [] };
+          streamRef.current = s;
+          relatedRef.current = [];
+          setHasVideo(false);
+          if (modeRef.current === "video") {
+            modeRef.current = "audio";
+            setModeState("audio");
+          }
+          try {
+            ytRef.current?.stopVideo?.();
+          } catch {}
+          engineRef.current = "direct";
+          setEngine("direct");
+          applySource(s, "audio", resumeAt);
+          addHistory(song);
+          setLoading(false);
+          return;
+        }
+      } catch {}
 
       const skipDirect = prefRef.current === "embed" || Date.now() - directFailedAt.current < 10 * 60 * 1000;
 

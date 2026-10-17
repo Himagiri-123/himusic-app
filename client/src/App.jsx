@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { AppProvider, useApp } from "./store.jsx";
+import { DownloadsProvider } from "./downloads.jsx";
 import { PlayerProvider, usePlayer } from "./PlayerContext.jsx";
 import { NavCtx } from "./nav.jsx";
 import { pushEntry, goBack, popAll } from "./historyStack.js";
@@ -108,7 +109,9 @@ function Shell() {
 export default function App() {
   return (
     <AppProvider>
-      <Shell />
+      <DownloadsProvider>
+        <Shell />
+      </DownloadsProvider>
     </AppProvider>
   );
 }

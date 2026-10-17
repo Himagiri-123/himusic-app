@@ -1,5 +1,6 @@
 import { useApp } from "../store.jsx";
 import { usePlayer } from "../PlayerContext.jsx";
+import { useDownloads } from "../downloads.jsx";
 import { cleanArtist } from "../hooks.js";
 import Cover from "./Cover.jsx";
 import Icon from "./Icon.jsx";
@@ -7,6 +8,9 @@ import Icon from "./Icon.jsx";
 export default function SongRow({ song, list, onRemove }) {
   const { isLiked, toggleLike, setMenu } = useApp();
   const { play, current, playing } = usePlayer();
+  const dl = useDownloads();
+  const saved = dl.isDownloaded(song.id);
+  const pct = dl.progress[song.id];
   const active = current?.id === song.id;
   const liked = isLiked(song.id);
 
@@ -18,6 +22,8 @@ export default function SongRow({ song, list, onRemove }) {
           <div className="title">{song.title}</div>
           <div className="sub">
             {active && playing && <span className="eq" aria-hidden="true"><i /><i /><i /></span>}
+            {saved && <span className="dl-badge" aria-label="Downloaded"><Icon name="downloaded" size={14} /></span>}
+            {pct != null && <span className="dl-pct">{Math.round(pct * 100)}%</span>}
             {cleanArtist(song.artist)}
           </div>
         </div>

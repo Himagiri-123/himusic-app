@@ -7,13 +7,13 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
-      includeAssets: ["icon.svg"],
+      includeAssets: ["favicon-48.png", "apple-touch-icon.png", "logo.png"],
       manifest: {
         name: "HiMusic",
         short_name: "HiMusic",
         description: "Ad-free music player with audio-only mode",
         theme_color: "#121212",
-        background_color: "#121212",
+        background_color: "#000000",
         display: "standalone",
         orientation: "portrait",
         start_url: "/",
@@ -21,7 +21,7 @@ export default defineConfig({
         icons: [
           { src: "pwa-192x192.png", sizes: "192x192", type: "image/png" },
           { src: "pwa-512x512.png", sizes: "512x512", type: "image/png" },
-          { src: "pwa-512x512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+          { src: "pwa-maskable-512x512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
         ],
       },
       workbox: {

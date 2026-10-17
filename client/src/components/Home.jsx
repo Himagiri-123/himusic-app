@@ -19,7 +19,7 @@ const readCache = () => {
 
 export default function Home() {
   const { lib, libLoaded, user, logout } = useApp();
-  const { play, current } = usePlayer();
+  const { play, current, pref, setPref } = usePlayer();
   const nav = useNav();
   const online = useOnline();
   const [rows, setRows] = useState(readCache);
@@ -86,6 +86,9 @@ export default function Home() {
             <div className="pop" onClick={() => setMenuOpen(false)}>
               <div className="pop-name">{user?.name}</div>
               <div className="pop-sub">{user?.email}</div>
+              <button className="pop-btn" onClick={() => setPref(pref === "auto" ? "embed" : "auto")}>
+                Player engine: {pref === "auto" ? "Auto (recommended)" : "YouTube player"}
+              </button>
               <button className="pop-btn" onClick={logout}>
                 <Icon name="logout" size={18} /> Log out
               </button>

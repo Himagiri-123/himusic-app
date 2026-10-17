@@ -79,12 +79,23 @@ export function AppProvider({ children }) {
     } catch {}
   }, [lib, libLoaded, user]);
 
-  const authenticate = async (mode, form) => {
-    const data = await api[mode](form);
+  useEffect(() => {
+    const h = () => logout();
+    window.addEventListener("hm-unauthorized", h);
+    return () => window.removeEventListener("hm-unauthorized", h);
+  }, [logout]);
+
+  // call with the {token,user} reply of login / verify / reset / (unverified) register
+  const acceptAuth = (data) => {
     localStorage.setItem("hm_token", data.token);
     localStorage.setItem("hm_user", JSON.stringify(data.user));
     setUser(data.user);
     setLib(readLib(data.user.id));
+  };
+  const authenticate = async (mode, form) => {
+    const data = await api[mode](form);
+    if (data.token) acceptAuth(data);
+    return data;
   };
 
   const isLiked = (id) => lib.liked.some((s) => s.id === id);
@@ -140,7 +151,7 @@ export function AppProvider({ children }) {
     <Ctx.Provider
       value={{
         user, lib, libLoaded, menu, setMenu, picker, setPicker, editor, setEditor, toast, showToast,
-        logout, authenticate, isLiked, toggleLike, addHistory,
+        logout, authenticate, acceptAuth, isLiked, toggleLike, addHistory,
         createPlaylist, updatePlaylist, deletePlaylist, addToPlaylist, removeFromPlaylist,
       }}
     >

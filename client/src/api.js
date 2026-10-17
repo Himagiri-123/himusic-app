@@ -15,8 +15,10 @@ async function request(path, { method = "GET", body } = {}) {
     data = await res.json();
   } catch {}
   if (!res.ok) {
+    if (res.status === 401 && token && !path.startsWith("/api/auth/")) window.dispatchEvent(new Event("hm-unauthorized"));
     const err = new Error(data.error || "Request failed");
     err.status = res.status;
+    err.retryAfter = data.retryAfter;
     throw err;
   }
   return data;
@@ -27,6 +29,10 @@ const enc = encodeURIComponent;
 export const api = {
   register: (b) => request("/api/auth/register", { method: "POST", body: b }),
   login: (b) => request("/api/auth/login", { method: "POST", body: b }),
+  verify: (b) => request("/api/auth/verify", { method: "POST", body: b }),
+  resend: (b) => request("/api/auth/resend", { method: "POST", body: b }),
+  forgot: (b) => request("/api/auth/forgot", { method: "POST", body: b }),
+  reset: (b) => request("/api/auth/reset", { method: "POST", body: b }),
 
   search: (q) => request(`/api/music/search?q=${enc(q)}`),
   artists: (q) => request(`/api/music/artists?q=${enc(q)}`),

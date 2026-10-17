@@ -270,3 +270,16 @@ h2 { font-size: 1.35rem; font-weight: 800; letter-spacing: -.2px; }
   .toast { bottom: calc(var(--mini-h) + 24px); left: calc(50% + 116px); }
   .install { margin-left: 16px; margin-right: 16px; max-width: none; }
 }
+
+/* auth extras */
+.auth-logo { display: block; margin: 0 auto -4px; border-radius: 50%; }
+.auth-title { margin: 0; text-align: center; font-size: 1.1rem; font-weight: 700; }
+.auth-card .info { background: rgba(29,185,84,.12); border: 1px solid rgba(29,185,84,.4); color: #b7f0cb; border-radius: 6px; padding: 10px 12px; font-size: .85rem; }
+.code-input { text-align: center; letter-spacing: .5em; font-size: 1.4rem; font-weight: 700; }
+.auth-card .link:disabled { opacity: .5; }
+
+/* downloads */
+.dl-cover { background: linear-gradient(135deg, #1db954, #0b6b30); display: grid; place-items: center; color: #000; border-radius: 4px; }
+.dl-badge { color: var(--green); display: inline-flex; vertical-align: -2px; margin-right: 4px; }
+.dl-pct { color: var(--green); font-size: .75rem; margin-right: 6px; font-weight: 700; }
+.dl-pct.big { font-size: .8rem; }
