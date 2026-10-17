@@ -99,6 +99,17 @@ On **OriginOS / Funtouch (vivo)**: Settings → Battery → Background power con
 ## Offline downloads
 Song menu (⋯) → *Download for offline*, or the download button in the player / on a playlist (*download all*). Files are stored inside the app (browser storage) per user, listed in Your Library → *Downloaded*, and play with no internet. They do not appear in the phone gallery/files app, and clearing browser data or logging out on another account removes access.
 
+## New features (Settings = avatar on Home -> Settings)
+- **Streaming quality**: Auto uses Low on mobile data and High on Wi-Fi (Chrome/Android). Low ~ half the data of Normal. The server also sends audio in ~1 MB pieces, so skipping a song never downloads the whole file.
+- **Sleep timer** (moon button in the full player): 15 / 30 / 60 min or end of song; the music fades out.
+- **Autoplay similar songs** (radio) when your playlist ends; **Crossfade** 3-12 s; **Equalizer** (presets + extra bass). Equalizer is off by default because on some phones WebAudio can stop when the screen is off.
+- **Offline only** mode: no internet calls at all, only downloaded songs.
+- **Voice search** (mic in Search; Telugu / English / Hindi). Needs Chrome/Android and internet.
+- **Share**: song menu -> Share on WhatsApp / Copy link; playlists have a WhatsApp button. Friends open the link, log in, and play/save it.
+- **Shared playlists**: Library -> New shared playlist, send the invite link; everyone can add songs (updates every 15 s).
+- **Import**: Library -> Import playlist (public YouTube playlist link, or Spotify link - Spotify needs each song to be searched on YouTube, so it can take a minute).
+- **HiMusic Wrapped**: Library -> Your HiMusic Wrapped. Counts songs you listened to for 30 s or more.
+
 ## Install as app
 
 Open the Vercel URL on your phone in Chrome -> menu -> "Install app" / "Add to Home screen".

@@ -8,15 +8,37 @@ import { cleanArtist, rgb, useDominantColor } from "../hooks.js";
 import Cover from "./Cover.jsx";
 import Icon from "./Icon.jsx";
 import SongRow from "./SongRow.jsx";
+import { joinLink, openWhatsApp, playlistLink } from "../share.js";
 
 // One screen for: Liked Songs, Recently played, a playlist, or an artist page
 export default function Collection({ view }) {
-  const { lib, setEditor, deletePlaylist, removeFromPlaylist } = useApp();
+  const { lib, setEditor, deletePlaylist, removeFromPlaylist, collabs, upsertCollab, removeFromCollab, leaveCollab, createPlaylist, refresh, showToast } = useApp();
   const { playAll } = usePlayer();
   const nav = useNav();
   const dl = useDownloads();
   const [artistSongs, setArtistSongs] = useState(null);
   const [artistErr, setArtistErr] = useState("");
+  const [shared, setShared] = useState(null); // playlist opened from a shared link
+  const [sharedErr, setSharedErr] = useState("");
+  const collab = view.type === "collab" ? collabs.find((c) => c.id === view.id) : null;
+
+  useEffect(() => {
+    if (view.type !== "shared") return;
+    api.sharedPlaylist(view.code).then(setShared).catch((e) => setSharedErr(e.message));
+  }, [view]); // eslint-disable-line
+
+  // shared playlists: pick up songs friends add (every 15 s while open)
+  useEffect(() => {
+    if (view.type !== "collab") return;
+    let dead = false;
+    const tick = () => api.collab(view.id).then((c) => !dead && upsertCollab(c)).catch(() => {});
+    tick();
+    const t = setInterval(tick, 15000);
+    return () => {
+      dead = true;
+      clearInterval(t);
+    };
+  }, [view]); // eslint-disable-line
 
   const playlist = view.type === "playlist" ? lib.playlists.find((p) => p._id === view.id) : null;
 
@@ -49,6 +71,16 @@ export default function Collection({ view }) {
     kind = "History";
     songs = lib.history;
     cover = lib.history[0]?.thumbnail;
+  } else if (view.type === "shared") {
+    title = shared?.name || "Shared playlist";
+    kind = shared ? `Shared by ${shared.owner}` : "Shared playlist";
+    songs = shared?.songs || [];
+    cover = shared?.cover || songs[0]?.thumbnail;
+  } else if (view.type === "collab") {
+    title = collab?.name || "Shared playlist";
+    kind = collab ? `Shared · ${collab.members.length} people` : "Shared";
+    songs = collab?.songs || [];
+    cover = songs[0]?.thumbnail;
   } else if (view.type === "downloads") {
     title = "Downloaded";
     kind = "Offline";
@@ -69,6 +101,14 @@ export default function Collection({ view }) {
 
   const accent = useDominantColor(cover, title);
 
+  if (sharedErr) {
+    return (
+      <div className="page">
+        <button className="ic back" onClick={nav.back}><Icon name="back" /></button>
+        <p className="sub center pad">{sharedErr || "This playlist is not available."}</p>
+      </div>
+    );
+  }
   if (view.type === "playlist" && !playlist) {
     return (
       <div className="page">
@@ -84,6 +124,35 @@ export default function Collection({ view }) {
       await deletePlaylist(playlist._id);
       nav.back();
     } catch {}
+  };
+
+  const saveShared = async () => {
+    try {
+      const p = await createPlaylist(shared.name);
+      await api.bulkAdd(p._id, shared.songs);
+      await refresh();
+      showToast("Saved to your library");
+    } catch (e) {
+      showToast(e.message);
+    }
+  };
+  const sharePl = async () => {
+    try {
+      const r = await api.sharePlaylist(view.type === "liked" ? { kind: "liked" } : { playlistId: playlist._id });
+      openWhatsApp(`🎶 Listen to "${title}" on HiMusic\n${playlistLink(r.code)}`);
+    } catch (e) {
+      showToast(e.message);
+    }
+  };
+  const invite = () => openWhatsApp(`Join my shared playlist "${collab.name}" on HiMusic and add your songs 🎶\n${joinLink(collab.code)}`);
+  const leave = async () => {
+    if (!confirm(collab.mine ? `Delete "${collab.name}" for everyone?` : `Leave "${collab.name}"?`)) return;
+    try {
+      await leaveCollab(collab.id);
+      nav.back();
+    } catch (e) {
+      showToast(e.message);
+    }
   };
 
   return (
@@ -114,6 +183,18 @@ export default function Collection({ view }) {
           <button className="ic" onClick={() => dl.downloadMany(songs)} aria-label="Download all">
             <Icon name="download" size={28} />
           </button>
+        )}
+        {(playlist || view.type === "liked") && songs.length > 0 && (
+          <button className="ic" onClick={sharePl} aria-label="Share on WhatsApp"><Icon name="whatsapp" size={26} /></button>
+        )}
+        {view.type === "shared" && shared && (
+          <button className="btn-green small" onClick={saveShared}>Save to my library</button>
+        )}
+        {collab && (
+          <>
+            <button className="ic" onClick={invite} aria-label="Invite friends"><Icon name="whatsapp" size={26} /></button>
+            <button className="ic" onClick={leave} aria-label="Leave"><Icon name="trash" size={24} /></button>
+          </>
         )}
         {playlist && (
           <>
@@ -151,7 +232,11 @@ export default function Collection({ view }) {
             key={s.id}
             song={s}
             list={songs}
-            onRemove={playlist ? (song) => removeFromPlaylist(playlist._id, song.id) : undefined}
+            onRemove={
+              playlist ? (song) => removeFromPlaylist(playlist._id, song.id)
+              : collab ? (song) => removeFromCollab(collab.id, song.id)
+              : undefined
+            }
           />
         ))}
       </div>

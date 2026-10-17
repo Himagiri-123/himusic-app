@@ -4,7 +4,7 @@ import Cover from "./Cover.jsx";
 import Icon from "./Icon.jsx";
 
 export default function PlaylistPicker() {
-  const { picker, setPicker, lib, addToPlaylist, createPlaylist } = useApp();
+  const { picker, setPicker, lib, addToPlaylist, createPlaylist, collabs, addToCollab, showToast } = useApp();
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   if (!picker) return null;
@@ -15,6 +15,15 @@ export default function PlaylistPicker() {
     try {
       await addToPlaylist(id, picker);
     } catch {}
+  };
+
+  const pickCollab = async (id) => {
+    close();
+    try {
+      await addToCollab(id, picker);
+    } catch (e) {
+      showToast(e.message);
+    }
   };
 
   const create = async (e) => {
@@ -42,6 +51,15 @@ export default function PlaylistPicker() {
               <span>
                 {p.name}
                 <small className="sub"> · {p.songs.length} songs</small>
+              </span>
+            </button>
+          ))}
+          {collabs.map((c) => (
+            <button key={c.id} className="sheet-item" onClick={() => pickCollab(c.id)}>
+              <div className="cover collab-cover" style={{ width: 44, height: 44 }}><Icon name="group" size={22} /></div>
+              <span>
+                {c.name}
+                <small className="sub"> · shared · {c.songs.length} songs</small>
               </span>
             </button>
           ))}

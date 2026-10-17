@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import { api } from "./api";
 import { useApp } from "./store.jsx";
 import { useDownloads } from "./downloads.jsx";
+import { useSettings, resolveQuality, EQ_PRESETS } from "./settings.jsx";
 import { SILENT_WAV } from "./silent.js";
 import { pushEntry, goBack } from "./historyStack.js";
 
@@ -84,6 +85,21 @@ export function PlayerProvider({ children }) {
   const dl = useDownloads();
   const getLocalRef = useRef(null);
   getLocalRef.current = dl?.getUrl;
+  const dlSongsRef = useRef([]);
+  dlSongsRef.current = dl?.songs || [];
+  const st = useSettings();
+  const stRef = useRef(st);
+  stRef.current = st;
+  const quality = () => resolveQuality(stRef.current.quality);
+  const xfading = useRef(false);
+  const fadeTimer = useRef(null);
+  const sleepTimer = useRef(null);
+  const sleepRef = useRef(null);
+  const [sleep, setSleepState] = useState(null); // { mode: "time", endAt } | { mode: "song" } | null
+  const listened = useRef(0); // seconds actually heard of the current song (for HiMusic Wrapped)
+  const lastTick = useRef(0);
+  const radioFor = useRef(null);
+  const eqRef = useRef(null);
 
   const [current, setCurrent] = useState(null);
   const [mode, setModeState] = useState("audio");
@@ -114,6 +130,9 @@ export function PlayerProvider({ children }) {
     const el = elsRef.current[activeRef.current];
     if (!el || !s) return;
     if (pendingRef.current) pendingRef.current.el.removeEventListener("loadedmetadata", pendingRef.current.fn);
+    el.volume = 1;
+    if (stRef.current.eqOn) el.crossOrigin = "anonymous"; // needed so the equalizer may process the audio
+    else el.removeAttribute("crossorigin");
     el.src = m === "video" && s.videoUrl ? s.videoUrl : s.audioUrl;
     const fn = () => {
       if (resumeAt) el.currentTime = resumeAt;
@@ -122,6 +141,60 @@ export function PlayerProvider({ children }) {
     pendingRef.current = { el, fn };
     el.addEventListener("loadedmetadata", fn, { once: true });
     el.load();
+    if (stRef.current.eqOn) {
+      ensureEq();
+      eqRef.current?.ctx.resume?.().catch(() => {});
+    }
+  }, []); // eslint-disable-line
+
+  /* ---------- equalizer (only created once the user turns it on) ---------- */
+  function ensureEq() {
+    if (eqRef.current) return eqRef.current;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC || !elsRef.current[0]) return null;
+    try {
+      const ctx = new AC();
+      const mk = (type, f, q) => {
+        const n = ctx.createBiquadFilter();
+        n.type = type;
+        n.frequency.value = f;
+        if (q) n.Q.value = q;
+        return n;
+      };
+      const bass = mk("lowshelf", 120), mid = mk("peaking", 1000, 1), treble = mk("highshelf", 6000);
+      bass.connect(mid);
+      mid.connect(treble);
+      treble.connect(ctx.destination);
+      for (const el of elsRef.current) ctx.createMediaElementSource(el).connect(bass);
+      eqRef.current = { ctx, bass, mid, treble };
+      applyEq();
+    } catch {
+      eqRef.current = null;
+    }
+    return eqRef.current;
+  }
+  function applyEq() {
+    const e = eqRef.current;
+    if (!e) return;
+    const c = stRef.current;
+    const p = c.eqOn ? EQ_PRESETS[c.eqPreset] || EQ_PRESETS.flat : EQ_PRESETS.flat;
+    e.bass.gain.value = c.eqOn ? p.bass + (c.bass || 0) : 0;
+    e.mid.gain.value = p.mid;
+    e.treble.gain.value = p.treble;
+  }
+  const eqKey = `${st.eqOn}|${st.eqPreset}|${st.bass}`;
+  useEffect(() => {
+    if (st.eqOn && !eqRef.current) {
+      // elements must be re-loaded once with CORS enabled before they can be equalized
+      if (currentRef.current && engineRef.current === "direct") load(currentRef.current, curTime());
+      else for (const el of elsRef.current) el && (el.crossOrigin = "anonymous");
+    }
+    applyEq();
+  }, [eqKey]); // eslint-disable-line
+  useEffect(() => {
+    const h = () => eqRef.current?.ctx.state === "suspended" && eqRef.current.ctx.resume().catch(() => {});
+    document.addEventListener("visibilitychange", h);
+    return () => document.removeEventListener("visibilitychange", h);
   }, []);
 
   /* ---------- embed engine ---------- */
@@ -182,6 +255,18 @@ export function PlayerProvider({ children }) {
   }, []); // eslint-disable-line
 
   /* ---------- gapless preloading ---------- */
+  // radio mode: when the playlist is over, find similar songs (same artist / mood) and keep going
+  const fillRadio = async () => {
+    const cur = currentRef.current;
+    if (!cur || radioFor.current === cur.id) return;
+    radioFor.current = cur.id;
+    try {
+      const r = await api.related(cur, [...playedIds.current]);
+      const more = (r.results || []).filter((x) => x.id && !playedIds.current.has(x.id));
+      if (more.length) relatedRef.current = more;
+    } catch {}
+  };
+
   const peekNext = () => {
     if (repeatRef.current === "one") return null;
     return (
@@ -194,14 +279,23 @@ export function PlayerProvider({ children }) {
 
   const preloadNext = async () => {
     if (engineRef.current !== "direct") return;
-    const song = peekNext();
+    let song = peekNext();
+    if (!song && stRef.current.autoplay && !stRef.current.offlineOnly) {
+      await fillRadio();
+      song = peekNext();
+    }
     if (!song || preloadRef.current?.id === song.id || preloadingId.current === song.id) return;
     preloadingId.current = song.id;
     try {
-      const s = await api.stream(song.id);
+      const local = await getLocalRef.current?.(song.id);
+      if (!local && stRef.current.offlineOnly) return;
+      const s = local ? { audioUrl: local, videoUrl: null, related: [] } : await api.stream(song.id, quality());
       const still = peekNext();
       const idle = getIdle();
       if (!still || still.id !== song.id || !idle) return;
+      idle.volume = 1;
+      if (stRef.current.eqOn) idle.crossOrigin = "anonymous";
+      else idle.removeAttribute("crossorigin");
       idle.src = modeRef.current === "video" && s.videoUrl ? s.videoUrl : s.audioUrl;
       idle.preload = "auto";
       idle.load();
@@ -226,7 +320,14 @@ export function PlayerProvider({ children }) {
 
   /* ---------- load a song with the best engine ---------- */
   const load = useCallback(
-    async (song, resumeAt = 0) => {
+    async (song, resumeAt = 0, opts = {}) => {
+      if (listened.current >= 30 && currentRef.current && currentRef.current.id !== song.id) {
+        const c = currentRef.current;
+        api.playStat({ id: c.id, title: c.title, artist: c.artist, thumbnail: c.thumbnail }, Math.round(listened.current)).catch(() => {});
+      }
+      if (currentRef.current?.id !== song.id) listened.current = 0;
+      xfading.current = false;
+      radioFor.current = null;
       const token = ++loadToken.current;
       setCurrent(song);
       currentRef.current = song;
@@ -250,10 +351,32 @@ export function PlayerProvider({ children }) {
         try {
           idle.currentTime = 0;
         } catch {}
+        const fade = opts.fade || 0;
+        if (fade) idle.volume = 0;
         idle.play().catch(() => applySource(pre.stream, modeRef.current, 0));
-        try {
-          old.pause();
-        } catch {}
+        if (fade) {
+          // crossfade: old song fades out while the new one fades in
+          clearInterval(fadeTimer.current);
+          const t0 = Date.now();
+          fadeTimer.current = setInterval(() => {
+            const k = Math.min(1, (Date.now() - t0) / (fade * 1000));
+            try {
+              old.volume = 1 - k;
+              idle.volume = k;
+            } catch {}
+            if (k >= 1) {
+              clearInterval(fadeTimer.current);
+              try {
+                old.pause();
+                old.volume = 1;
+              } catch {}
+            }
+          }, 100);
+        } else {
+          try {
+            old.pause();
+          } catch {}
+        }
         addHistory(song);
         setLoading(false);
         return;
@@ -284,11 +407,18 @@ export function PlayerProvider({ children }) {
         }
       } catch {}
 
+      if (stRef.current.offlineOnly) {
+        setError("This song is not downloaded. Turn off Offline mode to stream it.");
+        setPlaying(false);
+        setLoading(false);
+        return;
+      }
+
       const skipDirect = prefRef.current === "embed" || Date.now() - directFailedAt.current < 10 * 60 * 1000;
 
       if (!skipDirect) {
         try {
-          const s = await api.stream(song.id);
+          const s = await api.stream(song.id, quality());
           if (token !== loadToken.current) return;
           streamRef.current = s;
           relatedRef.current = s.related || [];
@@ -339,25 +469,32 @@ export function PlayerProvider({ children }) {
       song = list.shift();
       ctxQ.current = list;
     }
+    if (!song && stRef.current.offlineOnly) {
+      // offline mode: only songs saved on this phone
+      return dlSongsRef.current.find((s) => !playedIds.current.has(s.id));
+    }
+    if (!song && !stRef.current.autoplay) return null;
     if (!song) song = relatedRef.current.find((r) => r.id && !playedIds.current.has(r.id));
     const cur = currentRef.current;
     if (!song && cur) {
-      try {
-        const r = await api.search(cur.artist || cur.title);
-        const more = (r.results || []).filter((s) => s.id && !playedIds.current.has(s.id));
-        song = more[0];
-        ctxQ.current = more.slice(1, 15);
-      } catch {}
+      await fillRadio();
+      song = relatedRef.current.find((r) => r.id && !playedIds.current.has(r.id));
+      if (!song) {
+        try {
+          const r = await api.search(cur.artist || cur.title);
+          song = (r.results || []).find((s) => s.id && !playedIds.current.has(s.id));
+        } catch {}
+      }
     }
     return song;
   };
 
-  const next = useCallback(async () => {
+  const next = useCallback(async (opts) => {
     const cur = currentRef.current;
     if (cur) prevRef.current.push(cur);
     const song = await popNext();
     syncQueue();
-    if (song) load(song);
+    if (song) load(song, 0, { fade: opts?.fade || 0 });
     else setPlaying(false);
   }, [load]); // eslint-disable-line
   nextRef.current = next;
@@ -373,6 +510,12 @@ export function PlayerProvider({ children }) {
   }, []);
 
   const handleEnded = () => {
+    if (sleepRef.current?.mode === "song") {
+      // sleep timer: "end of this song"
+      setSleep(null);
+      setPlaying(false);
+      return;
+    }
     if (repeatRef.current === "one") {
       if (engineRef.current === "embed") {
         ytRef.current?.seekTo?.(0, true);
@@ -551,6 +694,48 @@ export function PlayerProvider({ children }) {
     [load] // eslint-disable-line
   );
 
+  /* ---------- sleep timer ---------- */
+  const setSleep = useCallback((opt) => {
+    clearTimeout(sleepTimer.current);
+    if (!opt) {
+      sleepRef.current = null;
+      setSleepState(null);
+      return;
+    }
+    if (opt === "song") {
+      sleepRef.current = { mode: "song" };
+      setSleepState(sleepRef.current);
+      return;
+    }
+    const ms = opt * 60 * 1000;
+    sleepRef.current = { mode: "time", endAt: Date.now() + ms };
+    setSleepState(sleepRef.current);
+    sleepTimer.current = setTimeout(() => {
+      // fade out over 4 s, then pause
+      sleepRef.current = null;
+      setSleepState(null);
+      const el = getEl();
+      if (engineRef.current === "embed" || !el) {
+        ytRef.current?.pauseVideo?.();
+        return;
+      }
+      const t0 = Date.now();
+      const iv = setInterval(() => {
+        const k = Math.min(1, (Date.now() - t0) / 4000);
+        try {
+          el.volume = 1 - k;
+        } catch {}
+        if (k >= 1) {
+          clearInterval(iv);
+          el.pause();
+          try {
+            el.volume = 1;
+          } catch {}
+        }
+      }, 100);
+    }, ms);
+  }, []); // eslint-disable-line
+
   /* ---------- full-screen player open/close (back button closes it) ---------- */
   const openFull = useCallback(() => {
     if (expandedRef.current) return;
@@ -572,6 +757,7 @@ export function PlayerProvider({ children }) {
       const p = ytRef.current;
       if (!p?.getCurrentTime) return;
       setTime({ cur: p.getCurrentTime() || 0, dur: p.getDuration?.() || 0 });
+      if (p.getPlayerState?.() === 1) listened.current += 0.5;
     }, 500);
     return () => clearInterval(t);
   }, [engine]);
@@ -637,6 +823,19 @@ export function PlayerProvider({ children }) {
     const el = e.currentTarget;
     const d = el.duration;
     setTime({ cur: el.currentTime, dur: d || currentRef.current?.duration || 0 });
+    const now = Date.now();
+    const dt = (now - lastTick.current) / 1000;
+    lastTick.current = now;
+    if (!el.paused && dt > 0 && dt < 2.5) listened.current += dt;
+    const xf = stRef.current.crossfade;
+    if (
+      xf && d && isFinite(d) && d > xf * 3 && d - el.currentTime <= xf + 0.3 && !xfading.current &&
+      preloadRef.current && engineRef.current === "direct" && repeatRef.current !== "one" &&
+      sleepRef.current?.mode !== "song" && !el.paused
+    ) {
+      xfading.current = true;
+      nextRef.current?.({ fade: xf });
+    }
     if (
       d &&
       isFinite(d) &&
@@ -661,6 +860,7 @@ export function PlayerProvider({ children }) {
         current, mode, engine, pref, playing, loading, error, time, expanded, hasVideo,
         queue, shuffle, repeat, expandedRef,
         openFull, closeFull, setPref, play, playAll, toggle, next, previous, seek, toggleMode,
+        sleep, setSleep,
         toggleShuffle, cycleRepeat, addToQueue, playNext, removeFromQueue, clearQueue, playFromQueue,
       }}
     >

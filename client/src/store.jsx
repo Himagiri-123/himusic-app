@@ -42,6 +42,9 @@ export function AppProvider({ children }) {
   const [picker, setPicker] = useState(null); // song to add to a playlist
   const [editor, setEditor] = useState(null); // {} = new playlist, { playlist } = edit
   const [toast, setToast] = useState("");
+  const [collabs, setCollabs] = useState([]); // shared playlists I'm part of
+  const [importOpen, setImportOpen] = useState(false);
+  const [wrappedOpen, setWrappedOpen] = useState(false);
   const toastTimer = useRef();
 
   const showToast = useCallback((m) => {
@@ -67,9 +70,40 @@ export function AppProvider({ children }) {
     setLibLoaded(true);
   }, [logout]);
 
+  const refreshCollabs = useCallback(async () => {
+    try {
+      setCollabs((await api.collabs()).collabs);
+    } catch {}
+  }, []);
+
   useEffect(() => {
-    if (user) refresh();
-  }, [user, refresh]);
+    if (user) {
+      refresh();
+      refreshCollabs();
+    } else setCollabs([]);
+  }, [user, refresh, refreshCollabs]);
+
+  const upsertCollab = (c) => setCollabs((l) => (l.some((x) => x.id === c.id) ? l.map((x) => (x.id === c.id ? c : x)) : [c, ...l]));
+  const createCollab = async (name) => {
+    const c = await api.createCollab(name);
+    upsertCollab(c);
+    showToast("Shared playlist created");
+    return c;
+  };
+  const joinCollab = async (code) => {
+    const c = await api.joinCollab(code);
+    upsertCollab(c);
+    return c;
+  };
+  const addToCollab = async (id, song) => {
+    upsertCollab(await api.collabAdd(id, slim(song)));
+    showToast("Added to shared playlist");
+  };
+  const removeFromCollab = async (id, sid) => upsertCollab(await api.collabRemove(id, sid));
+  const leaveCollab = async (id) => {
+    await api.collabLeave(id);
+    setCollabs((l) => l.filter((x) => x.id !== id));
+  };
 
   // keep a copy for offline use
   useEffect(() => {
@@ -152,6 +186,7 @@ export function AppProvider({ children }) {
       value={{
         user, lib, libLoaded, menu, setMenu, picker, setPicker, editor, setEditor, toast, showToast,
         logout, authenticate, acceptAuth, isLiked, toggleLike, addHistory,
+        collabs, upsertCollab, createCollab, joinCollab, addToCollab, removeFromCollab, leaveCollab, importOpen, setImportOpen, wrappedOpen, setWrappedOpen, refresh,
         createPlaylist, updatePlaylist, deletePlaylist, addToPlaylist, removeFromPlaylist,
       }}
     >

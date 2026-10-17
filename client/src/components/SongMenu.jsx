@@ -4,6 +4,7 @@ import { useDownloads } from "../downloads.jsx";
 import { cleanArtist } from "../hooks.js";
 import Cover from "./Cover.jsx";
 import Icon from "./Icon.jsx";
+import { copyText, openWhatsApp, songLink } from "../share.js";
 
 // bottom sheet opened by the ⋯ button on any song
 export default function SongMenu() {
@@ -48,6 +49,8 @@ export default function SongMenu() {
           label={saved ? "Remove download" : "Download for offline"}
           onClick={() => (saved ? dl.remove(song) : dl.download(song))}
         />
+        <Item icon="whatsapp" label="Share on WhatsApp" onClick={() => openWhatsApp(`🎵 ${song.title} — ${cleanArtist(song.artist)}\n${songLink(song)}`)} />
+        <Item icon="link" label="Copy link" onClick={async () => showToast((await copyText(songLink(song))) ? "Link copied" : "Could not copy")} />
         {onRemove && <Item icon="trash" label="Remove from this playlist" danger onClick={() => onRemove(song)} />}
       </div>
     </div>

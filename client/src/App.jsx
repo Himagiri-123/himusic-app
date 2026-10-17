@@ -1,6 +1,12 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppProvider, useApp } from "./store.jsx";
 import { DownloadsProvider } from "./downloads.jsx";
+import { SettingsProvider } from "./settings.jsx";
+import { useNav } from "./nav.jsx";
+import Settings from "./components/Settings.jsx";
+import ImportSheet from "./components/ImportSheet.jsx";
+import Wrapped from "./components/Wrapped.jsx";
+import Cover from "./components/Cover.jsx";
 import { PlayerProvider, usePlayer } from "./PlayerContext.jsx";
 import { NavCtx } from "./nav.jsx";
 import { pushEntry, goBack, popAll } from "./historyStack.js";
@@ -27,6 +33,49 @@ function Toast() {
   const { toast } = useApp();
   const { expanded } = usePlayer();
   return toast ? <div className={"toast" + (expanded ? " top" : "")}>{toast}</div> : null;
+}
+
+// Opens links friends send on WhatsApp: ?song=… (play a song), ?pl=… (shared playlist), ?join=… (shared playlist invite)
+function IncomingLinks() {
+  const nav = useNav();
+  const { play } = usePlayer();
+  const { joinCollab, showToast } = useApp();
+  const [song, setSong] = useState(null);
+
+  useEffect(() => {
+    const q = new URLSearchParams(location.search);
+    if (!q.has("song") && !q.has("pl") && !q.has("join")) return;
+    history.replaceState(history.state, "", location.pathname);
+    if (q.get("song")) {
+      const id = q.get("song");
+      if (/^[\w-]{6,15}$/.test(id))
+        setSong({ id, title: q.get("t") || "Shared song", artist: q.get("a") || "", thumbnail: q.get("th") || `https://i.ytimg.com/vi/${id}/mqdefault.jpg`, duration: Number(q.get("d")) || 0 });
+    } else if (q.get("pl")) nav.push({ type: "shared", code: q.get("pl") });
+    else if (q.get("join"))
+      joinCollab(q.get("join"))
+        .then((c) => {
+          showToast(`Joined "${c.name}"`);
+          nav.push({ type: "collab", id: c.id });
+        })
+        .catch((e) => showToast(e.message));
+  }, []); // eslint-disable-line
+
+  if (!song) return null;
+  return (
+    <div className="modal-bg" onClick={() => setSong(null)}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h3>A friend shared a song</h3>
+        <div className="share-card">
+          <Cover src={song.thumbnail} size={64} />
+          <div className="meta"><div className="title">{song.title}</div><div className="sub">{song.artist}</div></div>
+        </div>
+        <div className="modal-actions">
+          <button className="link" onClick={() => setSong(null)}>Not now</button>
+          <button className="btn-green small" onClick={() => { play(song, [song]); setSong(null); }}>Play</button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function Main() {
@@ -91,7 +140,11 @@ function Main() {
             ))}
           </nav>
 
+          <IncomingLinks />
           <SongMenu />
+          <Settings />
+          <ImportSheet />
+          <Wrapped />
           <PlaylistPicker />
           <PlaylistEditor />
           <Toast />
@@ -108,10 +161,12 @@ function Shell() {
 
 export default function App() {
   return (
-    <AppProvider>
-      <DownloadsProvider>
-        <Shell />
-      </DownloadsProvider>
-    </AppProvider>
+    <SettingsProvider>
+      <AppProvider>
+        <DownloadsProvider>
+          <Shell />
+        </DownloadsProvider>
+      </AppProvider>
+    </SettingsProvider>
   );
 }

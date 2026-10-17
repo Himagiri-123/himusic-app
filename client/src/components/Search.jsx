@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { useNav } from "../nav.jsx";
+import { useSettings } from "../settings.jsx";
+import { useDownloads } from "../downloads.jsx";
+import { useApp } from "../store.jsx";
 import Icon from "./Icon.jsx";
 import Cover from "./Cover.jsx";
 import SongRow from "./SongRow.jsx";
@@ -34,6 +37,32 @@ export default function Search() {
   const [err, setErr] = useState("");
   const reqId = useRef(0);
   const inputRef = useRef();
+  const settings = useSettings();
+  const dl = useDownloads();
+  const { showToast } = useApp();
+  const [listening, setListening] = useState(false);
+  const recRef = useRef(null);
+  const SR = typeof window !== "undefined" ? window.SpeechRecognition || window.webkitSpeechRecognition : null;
+
+  // voice search (Chrome / Android). Language is chosen in Settings.
+  const listen = () => {
+    if (!SR) return showToast("Voice search is not supported in this browser");
+    if (listening) return recRef.current?.stop();
+    const r = new SR();
+    r.lang = settings.voiceLang;
+    r.interimResults = true;
+    r.maxAlternatives = 1;
+    r.onresult = (e) => setQ(Array.from(e.results).map((x) => x[0].transcript).join(" "));
+    r.onerror = (e) => showToast(e.error === "not-allowed" ? "Allow the microphone to use voice search" : e.error === "no-speech" ? "Didn't hear anything" : "Voice search failed");
+    r.onend = () => setListening(false);
+    recRef.current = r;
+    setListening(true);
+    try {
+      r.start();
+    } catch {
+      setListening(false);
+    }
+  };
 
   // category cards / suggestions from other screens
   useEffect(() => {
@@ -56,6 +85,16 @@ export default function Search() {
       return;
     }
     const id = ++reqId.current;
+    if (settings.offlineOnly) {
+      // offline mode: search only inside downloaded songs
+      const w = text.toLowerCase();
+      setSongs(dl.songs.filter((s) => `${s.title} ${s.artist}`.toLowerCase().includes(w)));
+      setArtists([]);
+      setSugg([]);
+      setBusy(false);
+      setErr("");
+      return;
+    }
     const t = setTimeout(async () => {
       setBusy(true);
       setErr("");
@@ -71,7 +110,7 @@ export default function Search() {
       setSugg(g.status === "fulfilled" ? g.value.suggestions.filter((x) => x.toLowerCase() !== text.toLowerCase()).slice(0, 6) : []);
     }, 350);
     return () => clearTimeout(t);
-  }, [q]);
+  }, [q, settings.offlineOnly, dl.songs]);
 
   return (
     <div className="page">
@@ -94,6 +133,9 @@ export default function Search() {
             <Icon name="close" size={20} />
           </button>
         )}
+        <button className={"ic mic" + (listening ? " on" : "")} onClick={listen} aria-label="Voice search">
+          <Icon name="mic" size={22} />
+        </button>
       </div>
 
       {!q.trim() && (

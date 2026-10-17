@@ -6,6 +6,7 @@ import { useDownloads } from "../downloads.jsx";
 import { cleanArtist, fmt, rgb, useDominantColor } from "../hooks.js";
 import Cover from "./Cover.jsx";
 import Icon from "./Icon.jsx";
+import SleepSheet, { useSleepLeft } from "./SleepSheet.jsx";
 
 /* ---------- lyrics ---------- */
 
@@ -129,6 +130,8 @@ export default function Player() {
   const p = usePlayer();
   const { isLiked, toggleLike, setMenu } = useApp();
   const dl = useDownloads();
+  const [sleepOpen, setSleepOpen] = useState(false);
+  const sleepLeft = useSleepLeft();
   const { current } = p;
   const [view, setView] = useState("main"); // main | queue | lyrics
   const col = useDominantColor(current?.thumbnail, current?.id || "x");
@@ -259,6 +262,10 @@ export default function Player() {
               <Icon name="video" size={18} /> {p.mode === "video" ? "Audio only" : "Watch video"}
             </button>
             <span className="grow" />
+            <button className={"ic" + (p.sleep ? " on" : "")} onClick={() => setSleepOpen(true)} aria-label="Sleep timer">
+              <Icon name="moon" size={24} />
+            </button>
+            {sleepLeft && <span className="sub small sleep-left">{sleepLeft}</span>}
             {p.current && (
               <button
                 className={"ic" + (dl.isDownloaded(p.current.id) ? " on" : "")}
@@ -292,6 +299,7 @@ export default function Player() {
           {/* Note: when engine === "embed" the YouTube player is used; ads are only blocked if the browser blocks them (e.g. Brave). */}
         </div>
       </div>
+      {sleepOpen && <SleepSheet onClose={() => setSleepOpen(false)} />}
     </div>
   );
 }

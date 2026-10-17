@@ -3,6 +3,8 @@ import { api } from "../api";
 import { useApp } from "../store.jsx";
 import { usePlayer } from "../PlayerContext.jsx";
 import { useNav } from "../nav.jsx";
+import { useSettings } from "../settings.jsx";
+import { useDownloads } from "../downloads.jsx";
 import { cleanArtist, greeting, rgb, useDominantColor, useOnline } from "../hooks.js";
 import Cover from "./Cover.jsx";
 import Icon from "./Icon.jsx";
@@ -19,7 +21,9 @@ const readCache = () => {
 
 export default function Home() {
   const { lib, libLoaded, user, logout } = useApp();
-  const { play, current, pref, setPref } = usePlayer();
+  const { play, current } = usePlayer();
+  const settings = useSettings();
+  const dl = useDownloads();
   const nav = useNav();
   const online = useOnline();
   const [rows, setRows] = useState(readCache);
@@ -29,6 +33,7 @@ export default function Home() {
   const fetched = useRef(false);
 
   const load = async () => {
+    if (settings.offlineOnly) return;
     setLoading(true);
     setFailed(false);
     try {
@@ -48,10 +53,10 @@ export default function Home() {
   };
 
   useEffect(() => {
-    if (!libLoaded || fetched.current) return;
+    if (!libLoaded || fetched.current || settings.offlineOnly) return;
     fetched.current = true;
     load();
-  }, [libLoaded]); // eslint-disable-line
+  }, [libLoaded, settings.offlineOnly]); // eslint-disable-line
 
   useEffect(() => {
     if (online && failed) load();
@@ -62,14 +67,15 @@ export default function Home() {
     const seen = new Set();
     const out = [];
     const trending = rows.find((r) => r.id === "trending")?.items || [];
-    for (const s of [...lib.history, ...lib.liked, ...trending]) {
+    const pool = settings.offlineOnly ? dl.songs : [...lib.history, ...lib.liked, ...trending];
+    for (const s of pool) {
       if (!s?.id || seen.has(s.id)) continue;
       seen.add(s.id);
       out.push(s);
       if (out.length === 6) break;
     }
     return out;
-  }, [lib.history, lib.liked, rows]);
+  }, [lib.history, lib.liked, rows, settings.offlineOnly, dl.songs]);
 
   const accent = useDominantColor((current || lib.history[0])?.thumbnail, "home");
 
@@ -86,8 +92,8 @@ export default function Home() {
             <div className="pop" onClick={() => setMenuOpen(false)}>
               <div className="pop-name">{user?.name}</div>
               <div className="pop-sub">{user?.email}</div>
-              <button className="pop-btn" onClick={() => setPref(pref === "auto" ? "embed" : "auto")}>
-                Player engine: {pref === "auto" ? "Auto (recommended)" : "YouTube player"}
+              <button className="pop-btn" onClick={() => settings.setOpen(true)}>
+                <Icon name="settings" size={18} /> Settings
               </button>
               <button className="pop-btn" onClick={logout}>
                 <Icon name="logout" size={18} /> Log out
@@ -107,7 +113,14 @@ export default function Home() {
         ))}
       </div>
 
-      {rows.map((r) => (
+      {settings.offlineOnly && (
+        <div className="offline-banner">
+          <Icon name="downloaded" size={18} />
+          <span>Offline mode — only your {dl.items.length} downloaded songs. <button className="link" onClick={() => settings.set({ offlineOnly: false })}>Go online</button></span>
+        </div>
+      )}
+      {settings.offlineOnly && dl.songs.length > 6 && <Shelf title="Downloaded songs" items={dl.songs.slice(6)} type="songs" />}
+      {(settings.offlineOnly ? [] : rows).map((r) => (
         <Shelf key={r.id} title={r.title} items={r.items} type={r.type} />
       ))}
 

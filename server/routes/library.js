@@ -72,6 +72,17 @@ router.patch("/playlists/:pid", async (req, res) => {
   res.json({ playlists: u.playlists });
 });
 
+// add many songs at once (playlist import)
+router.post("/playlists/:pid/songs/bulk", async (req, res) => {
+  const u = await User.findById(req.userId);
+  const p = u.playlists.id(req.params.pid);
+  if (!p) return res.status(404).json({ error: "Playlist not found" });
+  const songs = (Array.isArray(req.body.songs) ? req.body.songs : []).slice(0, 300).map(clean).filter((s) => s.id);
+  for (const s of songs) if (!p.songs.some((x) => x.id === s.id)) p.songs.push(s);
+  await u.save();
+  res.json({ playlists: u.playlists });
+});
+
 router.delete("/playlists/:pid", async (req, res) => {
   const u = await User.findById(req.userId);
   u.playlists = u.playlists.filter((p) => String(p._id) !== req.params.pid);

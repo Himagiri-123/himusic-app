@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { Readable } from "node:stream";
-import { ytdlpEnabled, resolveAudio, ytdlpStatus, signAudio, verifyAudio, ensureYtdlp, dropAudio } from "../ytdlp.js";
+import { ytdlpEnabled, resolveAudio, ytdlpStatus, signAudio, verifyAudio, ensureYtdlp, dropAudio, QUALITIES } from "../ytdlp.js";
 
 const router = Router();
 
@@ -430,29 +430,33 @@ const TTL = 20 * 60 * 1000;
 router.get("/stream/:id", async (req, res) => {
   const { id } = req.params;
   if (!/^[\w-]{6,15}$/.test(id)) return res.status(400).json({ error: "bad id" });
+  const q = QUALITIES.includes(req.query.q) ? req.query.q : "normal";
   const base = process.env.PUBLIC_URL || `${req.protocol}://${req.get("host")}`;
-  const hit = streamCache.get(id);
+  const ckey = `${id}|${q}`;
+  const hit = streamCache.get(ckey);
   if (hit && Date.now() - hit.at < TTL) return res.json(hit.data);
   try {
     let data;
     // Tier 0: our own yt-dlp engine, streamed through /audio/:id (best for lock-screen playback)
     if (ytdlpEnabled()) {
       try {
-        await resolveAudio(id);
-        const { exp, sig } = signAudio(id);
-        // video + related still come from the public instances when they are reachable (best effort)
-        let extra = {};
-        try {
-          extra = await Promise.race([any(streamTasks(id, await instances())), new Promise((_, r) => setTimeout(() => r(new Error("slow")), 4000))]);
-        } catch {}
-        data = { audioUrl: `${base}/api/music/audio/${id}?exp=${exp}&sig=${sig}`, videoUrl: extra.videoUrl || null, related: extra.related || [], engine: "ytdlp" };
+        await resolveAudio(id, q);
+        const a = signAudio(id, "audio", q);
+        const v = signAudio(id, "video", "normal"); // video is only resolved if the user actually opens it
+        data = {
+          audioUrl: `${base}/api/music/audio/${id}?k=audio&q=${q}&exp=${a.exp}&sig=${a.sig}`,
+          videoUrl: `${base}/api/music/audio/${id}?k=video&q=normal&exp=${v.exp}&sig=${v.sig}`,
+          related: [], // fetched separately (/related) so playback starts without waiting
+          engine: "ytdlp",
+          quality: q,
+        };
       } catch (e) {
         console.error("yt-dlp tier failed:", id, e.message);
       }
     }
     if (!data) data = await any(streamTasks(id, await instances()));
     if (streamCache.size > 200) streamCache.clear();
-    streamCache.set(id, { at: Date.now(), data });
+    streamCache.set(ckey, { at: Date.now(), data });
     res.json(data);
   } catch (e) {
     console.error("stream failed", id, e.details || e.message);
@@ -467,14 +471,24 @@ router.get("/stream/:id", async (req, res) => {
 // Signed audio proxy: the <audio> tag requests this, we fetch the real file (with Range) and pipe it back.
 router.get("/audio/:id", async (req, res) => {
   const { id } = req.params;
-  if (!/^[\w-]{6,15}$/.test(id) || !verifyAudio(id, req.query.exp, req.query.sig)) return res.status(403).end();
+  const kind = req.query.k === "video" ? "video" : "audio";
+  const q = QUALITIES.includes(req.query.q) ? req.query.q : "normal";
+  if (!/^[\w-]{6,15}$/.test(id) || !verifyAudio(id, kind, q, req.query.exp, req.query.sig)) return res.status(403).end();
   try {
-    const info = await resolveAudio(id);
+    const info = await resolveAudio(id, q, kind);
     const headers = { "User-Agent": UA };
-    if (req.headers.range) headers.Range = req.headers.range;
+    // Range requests are capped (~1 MB per request) so a skipped song never downloads the whole file.
+    // Requests with no Range header (offline downloads) get the full file.
+    const CAP = Number(process.env.CHUNK_BYTES) || 1024 * 1024;
+    const m = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range || "");
+    if (m) {
+      const start = Number(m[1]);
+      const end = m[2] ? Math.min(Number(m[2]), start + CAP - 1) : start + CAP - 1;
+      headers.Range = `bytes=${start}-${end}`;
+    } else if (req.headers.range) headers.Range = req.headers.range;
     const up = await fetch(info.url, { headers });
     if (!up.ok && up.status !== 206) {
-      dropAudio(id);
+      dropAudio(id, q, kind);
       return res.status(502).end();
     }
     res.status(up.status);
@@ -491,6 +505,24 @@ router.get("/audio/:id", async (req, res) => {
     console.error("audio proxy failed", id, e.message);
     if (!res.headersSent) res.status(502).end();
   }
+});
+
+// Songs "like this one" for auto-play (radio): other tracks by the same artist / same mood, never repeats the seed
+router.get("/related", async (req, res) => {
+  const title = String(req.query.title || "").slice(0, 120);
+  const artist = String(req.query.artist || "").replace(/ - Topic$/i, "").slice(0, 80);
+  const exclude = new Set(String(req.query.exclude || "").split(",").filter(Boolean));
+  if (!title && !artist) return res.json({ results: [] });
+  const queries = [`${artist} songs`.trim(), `${title} ${artist} similar songs`.trim()];
+  const out = [];
+  for (const qq of queries) {
+    try {
+      const { results } = await runSearch(qq);
+      for (const r of results) if (r.id && !exclude.has(r.id) && !out.some((o) => o.id === r.id)) out.push(r);
+    } catch {}
+    if (out.length >= 12) break;
+  }
+  res.json({ results: out.slice(0, 20) });
 });
 
 router.get("/debug/ytdlp", async (req, res) => {
@@ -711,7 +743,7 @@ router.get("/lyrics", async (req, res) => {
         "user-agent": "HiMusic/1.0",
       });
       const ok = (Array.isArray(list) ? list : []).filter((x) => x.syncedLyrics || x.plainLyrics);
-      const near = duration ? ok.filter((x) => Math.abs((x.duration || 0) - duration) <= 10) : ok;
+      const near = duration ? ok.filter((x) => Math.abs((x.duration || 0) - duration) <= 20) : ok;
       const pool = near.length ? near : duration ? [] : ok;
       const pick = pool.find((x) => x.syncedLyrics) || pool[0];
       return pick

@@ -5,6 +5,7 @@ import mongoose from "mongoose";
 import realAuthRouter from "./routes/auth.js";
 import musicRoutes from "./routes/music.js";
 import libraryRoutes from "./routes/library.js";
+import socialRoutes from "./routes/social.js";
 import auth from "./middleware/auth.js";
 
 const app = express();
@@ -47,6 +48,7 @@ async function start() {
   app.use("/api/auth", await realAuthRouter());
   app.use("/api/music", musicGate, musicRoutes);
   app.use("/api/library", libraryRoutes);
+  app.use("/api/social", socialRoutes);
 
   await mongoose.connect(process.env.MONGO_URI);
   console.log("MongoDB connected");
