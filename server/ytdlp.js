@@ -42,8 +42,13 @@ export function ensureYtdlp() {
 }
 
 function cookieFile() {
-  // Netscape cookies.txt of a (throwaway) Google account: helps when YouTube blocks the server's IP.
-  // Paste it in YT_COOKIES, or base64 of the file in YT_COOKIES_B64 (if the host mangles line breaks).
+  // 1. First check if Render secret file exists (The best and most secure way)
+  const secretPath = "/etc/secrets/cookies.txt";
+  if (fs.existsSync(secretPath)) {
+    return secretPath;
+  }
+
+  // 2. Fallback to Environment Variables
   let raw = process.env.YT_COOKIES;
   if (process.env.YT_COOKIES_B64) {
     try {
@@ -60,7 +65,8 @@ function cookieFile() {
     return null;
   }
 }
-const hasCookies = () => !!(process.env.YT_COOKIES || process.env.YT_COOKIES_B64);
+
+const hasCookies = () => fs.existsSync("/etc/secrets/cookies.txt") || !!(process.env.YT_COOKIES || process.env.YT_COOKIES_B64);
 
 const cache = new Map(); // id -> { at, data }
 const inflight = new Map();
