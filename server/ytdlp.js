@@ -261,8 +261,7 @@ async function resolveFastAudio(id, q) {
     } catch {}
   }
 
-  // 3. Emergency fallback for non-music test videos (like "Me at the zoo" jNQXAC9IVRw)
-  return await searchItunesFallback("Alan Walker Faded");
+ throw new Error("no matching stream found");
 }
 
 async function run(id, q, kind) {
