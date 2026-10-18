@@ -110,6 +110,19 @@ Song menu (⋯) → *Download for offline*, or the download button in the player
 - **Import**: Library -> Import playlist (public YouTube playlist link, or Spotify link - Spotify needs each song to be searched on YouTube, so it can take a minute).
 - **HiMusic Wrapped**: Library -> Your HiMusic Wrapped. Counts songs you listened to for 30 s or more.
 
+## Android app (APK) + auto update
+The Android app is a thin shell (Capacitor) that opens your live website, so **every website update reaches the app automatically** with no new APK. The shell adds what browsers cannot do: a real notification + lock-screen / Origin island controls and music that keeps playing in the background (foreground service).
+
+Build it on GitHub (no Android Studio needed):
+1. Push the code to GitHub (the repo must be **public** so the download link works for everyone).
+2. GitHub repo -> Settings -> Secrets and variables -> Actions -> **Variables**: `APP_URL` = your Vercel URL (https://....vercel.app) and `API_URL` = your Render URL.
+3. Create the app: `git tag v1.0.0 && git push origin v1.0.0` (or Actions -> "Build Android app" -> Run workflow). After ~5 minutes the APK is in **Releases** as `HiMusic.apk`.
+4. Vercel -> Environment variables: `VITE_GITHUB_REPO` = `yourname/yourrepo`, then redeploy. This switches on the **Download Android App** button (Settings) and the "new app version" popup inside the app.
+5. Install on the phone: open the APK, allow "install unknown apps". On first start allow **Notifications**. OriginOS: Battery -> HiMusic -> Allow background activity.
+- Website updates: when you deploy a new version, the app / PWA shows a **New version available -> Update now** popup.
+- Only change native code (`client/android`) -> push a new tag (v1.0.1, ...) for a new APK; the app then shows an "update" popup too. All builds use the same signing key (`client/android/app/himusic.keystore`), so updates install over the old app. Replace this key with your own secret one if you publish the app publicly.
+- Add `https://*.vercel.app` to `CLIENT_ORIGIN` on Render if you use Vercel preview URLs (wildcards are supported).
+
 ## Install as app
 
 Open the Vercel URL on your phone in Chrome -> menu -> "Install app" / "Add to Home screen".

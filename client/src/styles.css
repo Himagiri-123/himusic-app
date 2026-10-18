@@ -16,6 +16,7 @@
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body, #root { min-height: 100%; margin: 0; }
+html, body { overflow-x: hidden; max-width: 100%; }
 body {
   background: var(--bg); color: var(--text); color-scheme: dark;
   font-family: "Circular Std", "Segoe UI", system-ui, -apple-system, Roboto, "Noto Sans Telugu", sans-serif;
@@ -120,8 +121,10 @@ h2 { font-size: 1.35rem; font-weight: 800; letter-spacing: -.2px; }
 .results .shelf-row { margin-bottom: 4px; }
 
 /* ---------- song rows / library ---------- */
-.list { display: grid; }
-.song-row, .lib-row { display: flex; align-items: center; gap: 2px; }
+.list { display: grid; grid-template-columns: minmax(0, 1fr); }
+.page, .results, .list > * { min-width: 0; }
+.song-row, .lib-row { display: flex; align-items: center; gap: 2px; min-width: 0; max-width: 100%; }
+.song-row .meta .title { max-width: 100%; }
 .song-main, .lib-row { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 6px 4px; flex: 1; text-align: left; }
 .lib-row { width: 100%; border-radius: 6px; }
 .lib-row:hover { background: var(--card); }
@@ -341,3 +344,14 @@ h2 { font-size: 1.35rem; font-weight: 800; letter-spacing: -.2px; }
 .w-list b { font-size: 1.8rem; width: 32px; }
 .w-list span { display: grid; font-weight: 800; min-width: 0; }
 .w-list small { font-weight: 500; opacity: .8; }
+
+/* search history */
+.history { padding: 0 16px 8px; }
+.history-head { display: flex; align-items: center; justify-content: space-between; }
+.history-head .pad-h { padding: 0; }
+.history-head .link { color: var(--sub); font-size: .85rem; font-weight: 700; }
+.hist-row { display: flex; align-items: center; min-width: 0; }
+.hist-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 14px; padding: 11px 2px; text-align: left; color: #fff; }
+.hist-main span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist-main svg { color: var(--sub); flex: none; }
+.set-version{padding:4px 12px 10px;text-align:center}

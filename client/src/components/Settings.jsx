@@ -3,6 +3,8 @@ import { usePlayer } from "../PlayerContext.jsx";
 import { useDownloads } from "../downloads.jsx";
 import { EQ_PRESETS, connectionKind, resolveQuality, useSettings } from "../settings.jsx";
 import Icon from "./Icon.jsx";
+import { isNative } from "../native.js";
+import { apkUrl } from "./UpdatePrompt.jsx";
 
 const Seg = ({ value, options, onChange }) => (
   <div className="seg">
@@ -100,6 +102,12 @@ export default function Settings() {
           <button className="sheet-item" onClick={() => { close(); setImportOpen(true); }}>
             <Icon name="importList" size={24} /> <span>Import a playlist (YouTube / Spotify)</span>
           </button>
+          {!isNative && (
+            <a className="sheet-item" href={apkUrl() || undefined} onClick={(e) => !apkUrl() && (e.preventDefault(), alert("The Android app link is not set up yet. See README: 'Android app'."))}>
+              <Icon name="install" size={24} /> <span>Download Android App</span>
+            </a>
+          )}
+          <p className="sub small set-version">HiMusic v{__APP_VERSION__}{isNative ? " (Android app)" : ""}</p>
           <button className="sheet-item danger" onClick={() => { close(); logout(); }}>
             <Icon name="logout" size={24} /> <span>Log out {user?.email ? `(${user.email})` : ""}</span>
           </button>

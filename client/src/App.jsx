@@ -7,6 +7,7 @@ import Settings from "./components/Settings.jsx";
 import ImportSheet from "./components/ImportSheet.jsx";
 import Wrapped from "./components/Wrapped.jsx";
 import Cover from "./components/Cover.jsx";
+import UpdatePrompt from "./components/UpdatePrompt.jsx";
 import { PlayerProvider, usePlayer } from "./PlayerContext.jsx";
 import { NavCtx } from "./nav.jsx";
 import { pushEntry, goBack, popAll } from "./historyStack.js";
@@ -141,6 +142,7 @@ function Main() {
           </nav>
 
           <IncomingLinks />
+          <UpdatePrompt />
           <SongMenu />
           <Settings />
           <ImportSheet />

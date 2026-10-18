@@ -39,30 +39,47 @@ export function DownloadsProvider({ children }) {
       busy.current.add(song.id);
       setProgress((p) => ({ ...p, [song.id]: 0.01 }));
       try {
-        const s = await api.stream(song.id);
-        const res = await fetch(s.audioUrl);
-        if (!res.ok) throw new Error("download failed");
-        const total = Number(res.headers.get("content-length")) || 0;
-        const reader = res.body?.getReader();
-        let blob;
-        if (reader) {
-          const parts = [];
-          let got = 0;
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            parts.push(value);
-            got += value.length;
-            if (total) setProgress((p) => ({ ...p, [song.id]: Math.min(0.99, got / total) }));
+        const s = await api.stream(song.id, "normal");
+        // Download in 1 MB pieces (same way the player streams). One big request is often refused or cut off.
+        const parts = [];
+        let got = 0, total = 0, type = "";
+        for (;;) {
+          let res;
+          for (let attempt = 0; ; attempt++) {
+            try {
+              res = await fetch(s.audioUrl, { headers: { Range: `bytes=${got}-` } });
+              if (res.ok) break;
+              throw new Error(`server answered ${res.status}`);
+            } catch (e) {
+              if (attempt >= 2) throw e;
+              await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+            }
           }
-          blob = new Blob(parts, { type: res.headers.get("content-type") || "audio/mp4" });
-        } else blob = await res.blob();
+          type ||= res.headers.get("content-type") || "audio/mp4";
+          const buf = new Uint8Array(await res.arrayBuffer());
+          if (res.status === 200) {
+            // server ignored Range and sent the whole file
+            parts.length = 0;
+            parts.push(buf);
+            got = buf.length;
+            break;
+          }
+          parts.push(buf);
+          got += buf.length;
+          const m = /\/(\d+)$/.exec(res.headers.get("content-range") || "");
+          if (m) total = Number(m[1]);
+          if (total) setProgress((p) => ({ ...p, [song.id]: Math.min(0.99, got / total) }));
+          if (!buf.length || (total && got >= total)) break;
+        }
+        const blob = new Blob(parts, { type });
         if (blob.size < 10_000) throw new Error("download failed");
         const meta = await saveOffline(uid, song, blob);
         setItems((l) => [meta, ...l.filter((m) => m.id !== meta.id)]);
         showToast("Downloaded for offline");
       } catch (e) {
-        showToast(e?.name === "QuotaExceededError" ? "Not enough storage on this device" : "Download failed. Try again.");
+        const why = e?.name === "QuotaExceededError" ? "not enough storage on this device"
+          : e?.message === "Failed to fetch" ? "blocked by the network or server settings (CORS)" : e?.message || "unknown error";
+        showToast(`Download failed: ${why}`);
       } finally {
         busy.current.delete(song.id);
         setProgress((p) => {

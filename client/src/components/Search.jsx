@@ -39,7 +39,27 @@ export default function Search() {
   const inputRef = useRef();
   const settings = useSettings();
   const dl = useDownloads();
-  const { showToast } = useApp();
+  const { showToast, user } = useApp();
+  const HK = `hm_search_hist_${user?.id || "x"}`;
+  const [hist, setHist] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem(HK) || "[]");
+    } catch {
+      return [];
+    }
+  });
+  const writeHist = (n) => {
+    setHist(n);
+    try {
+      localStorage.setItem(HK, JSON.stringify(n));
+    } catch {}
+  };
+  // remember what was searched (on Enter, leaving the box, or opening a result)
+  const saveHist = (text) => {
+    const t = (text || "").trim();
+    if (t.length < 2) return;
+    writeHist([t, ...hist.filter((x) => x.toLowerCase() !== t.toLowerCase())].slice(0, 15));
+  };
   const [listening, setListening] = useState(false);
   const recRef = useRef(null);
   const SR = typeof window !== "undefined" ? window.SpeechRecognition || window.webkitSpeechRecognition : null;
@@ -126,6 +146,8 @@ export default function Search() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           enterKeyHint="search"
+          onKeyDown={(e) => e.key === "Enter" && (saveHist(q), e.currentTarget.blur())}
+          onBlur={() => saveHist(q)}
           autoComplete="off"
         />
         {q && (
@@ -137,6 +159,26 @@ export default function Search() {
           <Icon name="mic" size={22} />
         </button>
       </div>
+
+      {!q.trim() && hist.length > 0 && (
+        <section className="history">
+          <div className="history-head">
+            <h2 className="pad-h">Recent searches</h2>
+            <button className="link" onClick={() => writeHist([])}>Clear all</button>
+          </div>
+          {hist.map((h) => (
+            <div key={h} className="hist-row">
+              <button className="hist-main" onClick={() => setQ(h)}>
+                <Icon name="history" size={22} />
+                <span>{h}</span>
+              </button>
+              <button className="ic" onClick={() => writeHist(hist.filter((x) => x !== h))} aria-label={`Remove ${h}`}>
+                <Icon name="close" size={18} />
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
 
       {!q.trim() && (
         <>
@@ -152,7 +194,7 @@ export default function Search() {
       )}
 
       {q.trim() && (
-        <div className="results">
+        <div className="results" onClickCapture={(e) => e.target.closest?.(".song-main, .card, .chip") && saveHist(q)}>
           {sugg.length > 0 && (
             <div className="chips">
               {sugg.map((s) => (

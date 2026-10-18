@@ -1,0 +1,9 @@
+{
+  "appId": "com.himusic.app",
+  "appName": "HiMusic",
+  "webDir": "dist",
+  "backgroundColor": "#000000",
+  "android": {
+    "allowMixedContent": false
+  }
+}

@@ -15,7 +15,30 @@ app.disable("x-powered-by");
 const origins = (process.env.CLIENT_ORIGIN || "http://localhost:5173")
   .split(",")
   .map((s) => s.trim());
-app.use(cors({ origin: origins, credentials: true, exposedHeaders: ["Retry-After", "Content-Range", "Accept-Ranges"] }));
+// The audio proxy URLs are signed (the signature is the permission), so any origin may fetch them.
+// This makes offline downloads work from every domain (Vercel previews, the Android app, ...).
+app.use("/api/music/audio", (req, res, next) => {
+  res.set({
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+    "Access-Control-Allow-Headers": "Range, Content-Type",
+    "Access-Control-Expose-Headers": "Content-Range, Content-Length, Accept-Ranges, Content-Type",
+    "Access-Control-Max-Age": "86400",
+  });
+  if (req.method === "OPTIONS") return res.status(204).end();
+  next();
+});
+// listed origins, "*" wildcards (e.g. https://*.vercel.app) and the Android app's own origins
+const fixed = ["https://localhost", "http://localhost", "capacitor://localhost"];
+const wild = origins.filter((o) => o.includes("*")).map((o) => new RegExp("^" + o.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^.]+(?:\\.[^.]+)*") + "$"));
+const originOk = (o) => !o || origins.includes(o) || fixed.includes(o) || wild.some((r) => r.test(o));
+app.use(
+  cors({
+    origin: (o, cb) => cb(null, originOk(o)),
+    credentials: true,
+    exposedHeaders: ["Retry-After", "Content-Range", "Accept-Ranges"],
+  })
+);
 app.use((_req, res, next) => {
   res.set({
     "X-Content-Type-Options": "nosniff",

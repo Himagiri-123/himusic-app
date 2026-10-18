@@ -5,6 +5,7 @@ import { useDownloads } from "./downloads.jsx";
 import { useSettings, resolveQuality, EQ_PRESETS } from "./settings.jsx";
 import { SILENT_WAV } from "./silent.js";
 import { pushEntry, goBack } from "./historyStack.js";
+import { isNative, nativeMedia } from "./native.js";
 
 const Ctx = createContext(null);
 export const usePlayer = () => useContext(Ctx);
@@ -48,7 +49,10 @@ function loadYT() {
 }
 
 export function PlayerProvider({ children }) {
-  const { addHistory } = useApp();
+  const { addHistory, user } = useApp();
+  const resumeRef = useRef(null); // position to continue from after the app was closed
+  const loadRef = useRef(null);
+  const lastSave = useRef(0);
 
   // two media elements: one plays, the other pre-buffers the next song (gapless)
   const elsRef = useRef([null, null]);
@@ -321,6 +325,7 @@ export function PlayerProvider({ children }) {
   /* ---------- load a song with the best engine ---------- */
   const load = useCallback(
     async (song, resumeAt = 0, opts = {}) => {
+      resumeRef.current = null;
       if (listened.current >= 30 && currentRef.current && currentRef.current.id !== song.id) {
         const c = currentRef.current;
         api.playStat({ id: c.id, title: c.title, artist: c.artist, thumbnail: c.thumbnail }, Math.round(listened.current)).catch(() => {});
@@ -498,6 +503,7 @@ export function PlayerProvider({ children }) {
     else setPlaying(false);
   }, [load]); // eslint-disable-line
   nextRef.current = next;
+  loadRef.current = load;
 
   const seek = useCallback((t) => {
     if (engineRef.current === "embed") {
@@ -578,6 +584,14 @@ export function PlayerProvider({ children }) {
   );
 
   const toggle = useCallback(() => {
+    if (resumeRef.current != null && currentRef.current) {
+      // app was reopened: start the last song from where it stopped
+      const at = resumeRef.current;
+      resumeRef.current = null;
+      unlockIdle();
+      loadRef.current?.(currentRef.current, at);
+      return;
+    }
     if (engineRef.current === "embed") {
       const p = ytRef.current;
       if (!p?.getPlayerState) return;
@@ -757,16 +771,73 @@ export function PlayerProvider({ children }) {
       const p = ytRef.current;
       if (!p?.getCurrentTime) return;
       setTime({ cur: p.getCurrentTime() || 0, dur: p.getDuration?.() || 0 });
-      if (p.getPlayerState?.() === 1) listened.current += 0.5;
+      if (p.getPlayerState?.() === 1) {
+        listened.current += 0.5;
+        if (Date.now() - lastSave.current > 3000) {
+          lastSave.current = Date.now();
+          saveRef.current();
+        }
+      }
     }, 500);
     return () => clearInterval(t);
   }, [engine]);
 
+  /* ---------- resume where you left off (survives closing the app) ---------- */
+  const resumeKey = `hm_resume_${user?.id}`;
+  const saveResume = () => {
+    const c = currentRef.current;
+    if (!c || resumeRef.current != null || !user) return;
+    try {
+      localStorage.setItem(
+        resumeKey,
+        JSON.stringify({
+          song: { id: c.id, title: c.title, artist: c.artist, thumbnail: c.thumbnail, duration: c.duration },
+          pos: curTime(),
+          queue: [...userQ.current, ...ctxQ.current].slice(0, 40),
+        })
+      );
+    } catch {}
+  };
+  const saveRef = useRef(saveResume);
+  saveRef.current = saveResume;
+  useEffect(() => {
+    if (!user || currentRef.current) return;
+    try {
+      const r = JSON.parse(localStorage.getItem(resumeKey) || "null");
+      if (!r?.song?.id) return;
+      currentRef.current = r.song;
+      setCurrent(r.song);
+      setTime({ cur: r.pos || 0, dur: r.song.duration || 0 });
+      resumeRef.current = r.pos || 0;
+      ctxQ.current = r.queue || [];
+      contextRef.current = [r.song, ...(r.queue || [])];
+      playedIds.current.add(r.song.id);
+      syncQueue();
+    } catch {}
+  }, [user?.id]); // eslint-disable-line
+  useEffect(() => {
+    const h = () => document.visibilityState === "hidden" && saveRef.current();
+    document.addEventListener("visibilitychange", h);
+    window.addEventListener("pagehide", h);
+    return () => {
+      document.removeEventListener("visibilitychange", h);
+      window.removeEventListener("pagehide", h);
+    };
+  }, []);
+  useEffect(() => {
+    if (!playing) saveRef.current(); // paused: remember the exact spot
+  }, [playing]);
+
   // lock-screen / notification controls
   useEffect(() => {
     if (!("mediaSession" in navigator) || !current) return;
-    const art = current.thumbnail
-      ? [96, 192, 256, 384, 512].map((n) => ({ src: current.thumbnail, sizes: `${n}x${n}` }))
+    // hqdefault (480x360) is sharper than the small list thumbnail, good for lock screens
+    const big = current.id ? `https://i.ytimg.com/vi/${current.id}/hqdefault.jpg` : current.thumbnail;
+    const art = big
+      ? [
+          { src: big, sizes: "480x360", type: "image/jpeg" },
+          ...(current.thumbnail && current.thumbnail !== big ? [{ src: current.thumbnail, sizes: "320x180", type: "image/jpeg" }] : []),
+        ]
       : [];
     navigator.mediaSession.metadata = new MediaMetadata({
       title: current.title || "",
@@ -782,6 +853,11 @@ export function PlayerProvider({ children }) {
     };
     set("play", toggle);
     set("pause", toggle);
+    set("stop", () => {
+      const el = getEl();
+      if (engineRef.current === "embed") ytRef.current?.pauseVideo?.();
+      else el?.pause();
+    });
     set("nexttrack", () => nextRef.current?.());
     set("previoustrack", previous);
     set("seekto", (d) => d.seekTime != null && seek(d.seekTime));
@@ -792,6 +868,36 @@ export function PlayerProvider({ children }) {
   useEffect(() => {
     if ("mediaSession" in navigator) navigator.mediaSession.playbackState = playing ? "playing" : "paused";
   }, [playing]);
+
+  /* ---------- Android app: native notification / lock-screen / Origin island controls ---------- */
+  const playingRef = useRef(false);
+  playingRef.current = playing;
+  const ctlRef = useRef({});
+  ctlRef.current = { toggle, previous, seek };
+  useEffect(() => {
+    if (!isNative) return;
+    return nativeMedia.onAction(({ action, position }) => {
+      const c = ctlRef.current;
+      if (action === "play" && !playingRef.current) c.toggle();
+      else if (action === "pause" && playingRef.current) c.toggle();
+      else if (action === "next") nextRef.current?.();
+      else if (action === "previous") c.previous();
+      else if (action === "seek" && position != null) c.seek(position);
+    });
+  }, []);
+  const durRounded = Math.round(time.dur || 0);
+  useEffect(() => {
+    if (!isNative) return;
+    if (!current) return nativeMedia.stop();
+    nativeMedia.update({
+      title: current.title || "",
+      artist: current.artist || "",
+      artwork: current.id ? `https://i.ytimg.com/vi/${current.id}/hqdefault.jpg` : current.thumbnail || "",
+      playing,
+      position: Math.round(curTime() * 1000),
+      duration: Math.round((durRounded || current.duration || 0) * 1000),
+    });
+  }, [current?.id, playing, durRounded]); // eslint-disable-line
 
   const showVideo = expanded && mode === "video";
 
@@ -827,6 +933,10 @@ export function PlayerProvider({ children }) {
     const dt = (now - lastTick.current) / 1000;
     lastTick.current = now;
     if (!el.paused && dt > 0 && dt < 2.5) listened.current += dt;
+    if (now - lastSave.current > 3000) {
+      lastSave.current = now;
+      saveRef.current();
+    }
     const xf = stRef.current.crossfade;
     if (
       xf && d && isFinite(d) && d > xf * 3 && d - el.currentTime <= xf + 0.3 && !xfading.current &&
