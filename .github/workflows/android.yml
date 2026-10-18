@@ -41,6 +41,7 @@ jobs:
         id: v
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then V="${{ github.event.inputs.version }}"; else V="${GITHUB_REF_NAME#v}"; fi
+          if [ -z "$V" ] || [ "$V" = "main" ]; then V="1.0.0"; fi
           echo "name=$V" >> "$GITHUB_OUTPUT"
           echo "tag=v$V" >> "$GITHUB_OUTPUT"
 
@@ -60,9 +61,12 @@ jobs:
 
       - name: Build APK
         working-directory: client/android
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          API_URL: ${{ vars.API_URL }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon -PappVersionName=${{ steps.v.outputs.name }} -PappVersionCode=${{ github.run_number }}
+          ./gradlew assembleRelease --no-daemon -PappVersionName="${{ steps.v.outputs.name }}" -PappVersionCode="${{ github.run_number }}"
           cp app/build/outputs/apk/release/app-release.apk ../../HiMusic.apk
 
       - name: Publish release
