@@ -1,23 +1,29 @@
 apply plugin: 'com.android.application'
 
+def cSdk = (rootProject.ext.has("compileSdkVersion") && rootProject.ext.compileSdkVersion != null) ? rootProject.ext.compileSdkVersion : 34
+def mSdk = (rootProject.ext.has("minSdkVersion") && rootProject.ext.minSdkVersion != null) ? rootProject.ext.minSdkVersion : 23
+def tSdk = (rootProject.ext.has("targetSdkVersion") && rootProject.ext.targetSdkVersion != null) ? rootProject.ext.targetSdkVersion : 34
+
+def vCodeProp = project.findProperty("appVersionCode")
+def vCode = (vCodeProp != null && vCodeProp.toString().trim() != "") ? vCodeProp.toString().trim().toInteger() : 1
+
+def vNameProp = project.findProperty("appVersionName")
+def vName = (vNameProp != null && vNameProp.toString().trim() != "") ? vNameProp.toString().trim() : "1.0.0"
+
 android {
     namespace "com.himusic.app"
-    compileSdk rootProject.ext.compileSdkVersion
+    compileSdk cSdk
     defaultConfig {
         applicationId "com.himusic.app"
-        minSdkVersion rootProject.ext.minSdkVersion
-        targetSdkVersion rootProject.ext.targetSdkVersion
-        // set by the GitHub workflow from the release tag (v1.2.3 -> 1.2.3)
-        versionCode (project.findProperty("appVersionCode") ?: "1").toInteger()
-        versionName (project.findProperty("appVersionName") ?: "1.0.0")
+        minSdkVersion mSdk
+        targetSdkVersion tSdk
+        versionCode vCode
+        versionName vName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
-             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
-             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
-    // One fixed key for every build, so a new APK can be installed over the old one as an update.
     signingConfigs {
         himusic {
             storeFile file("himusic.keystore")
