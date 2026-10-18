@@ -35,7 +35,7 @@ jobs:
 
       - uses: android-actions/setup-android@v3
         with:
-          components: platform-tools,cmdline-tools;latest,build-tools;33.0.2
+          packages: 'platform-tools cmdline-tools;latest build-tools;33.0.2'
 
       - name: Version
         id: v
