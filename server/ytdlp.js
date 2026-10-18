@@ -42,24 +42,35 @@ export function ensureYtdlp() {
 }
 
 function cookieFile() {
-  // 1. First check if Render secret file exists (The best and most secure way)
+  let raw = "";
   const secretPath = "/etc/secrets/cookies.txt";
-  if (fs.existsSync(secretPath)) {
-    return secretPath;
-  }
 
-  // 2. Fallback to Environment Variables
-  let raw = process.env.YT_COOKIES;
-  if (process.env.YT_COOKIES_B64) {
+  // 1. Read from Render Secret (Best method)
+  if (fs.existsSync(secretPath)) {
+    raw = fs.readFileSync(secretPath, "utf8");
+  } 
+  // 2. Fallback to Env Variables
+  else if (process.env.YT_COOKIES) {
+    raw = process.env.YT_COOKIES;
+  } else if (process.env.YT_COOKIES_B64) {
     try {
       raw = Buffer.from(process.env.YT_COOKIES_B64.trim(), "base64").toString("utf8");
     } catch {}
   }
-  if (!raw) return null;
+
+  if (!raw || raw.trim() === "") return null;
+
+  // 3. Fix Formatting and write safe file
   const f = path.join(dir, "cookies.txt");
   try {
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(f, raw.replace(/\\n/g, "\n").replace(/\r\n/g, "\n"), { mode: 0o600 });
+    // Remove bad line breaks
+    raw = raw.replace(/\r\n/g, "\n");
+    // Ensure the Netscape header exists (yt-dlp crashes without this)
+    if (!raw.includes("# Netscape HTTP Cookie File")) {
+      raw = "# Netscape HTTP Cookie File\n# https://curl.haxx.se/rfc/cookie_spec.html\n# This is a generated file! Do not edit.\n\n" + raw;
+    }
+    fs.writeFileSync(f, raw, { mode: 0o600 });
     return f;
   } catch {
     return null;
