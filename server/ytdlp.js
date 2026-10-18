@@ -1,7 +1,6 @@
 // Own audio engine: yt-dlp resolves a YouTube video to a direct audio URL, and our server
 // streams it to the app's <audio> element (range requests supported). This is what makes
 // lock-screen / background playback work, because the browser sees a normal audio file.
-
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -42,42 +41,25 @@ export function ensureYtdlp() {
 }
 
 function cookieFile() {
-  let raw = "";
-  const secretPath = "/etc/secrets/cookies.txt";
-
-  // 1. Read from Render Secret (Best method)
-  if (fs.existsSync(secretPath)) {
-    raw = fs.readFileSync(secretPath, "utf8");
-  } 
-  // 2. Fallback to Env Variables
-  else if (process.env.YT_COOKIES) {
-    raw = process.env.YT_COOKIES;
-  } else if (process.env.YT_COOKIES_B64) {
+  // Netscape cookies.txt of a (throwaway) Google account: helps when YouTube blocks the server's IP.
+  // Paste it in YT_COOKIES, or base64 of the file in YT_COOKIES_B64 (if the host mangles line breaks).
+  let raw = process.env.YT_COOKIES;
+  if (process.env.YT_COOKIES_B64) {
     try {
       raw = Buffer.from(process.env.YT_COOKIES_B64.trim(), "base64").toString("utf8");
     } catch {}
   }
-
-  if (!raw || raw.trim() === "") return null;
-
-  // 3. Fix Formatting and write safe file
+  if (!raw) return null;
   const f = path.join(dir, "cookies.txt");
   try {
     fs.mkdirSync(dir, { recursive: true });
-    // Remove bad line breaks
-    raw = raw.replace(/\r\n/g, "\n");
-    // Ensure the Netscape header exists (yt-dlp crashes without this)
-    if (!raw.includes("# Netscape HTTP Cookie File")) {
-      raw = "# Netscape HTTP Cookie File\n# https://curl.haxx.se/rfc/cookie_spec.html\n# This is a generated file! Do not edit.\n\n" + raw;
-    }
-    fs.writeFileSync(f, raw, { mode: 0o600 });
+    fs.writeFileSync(f, raw.replace(/\\n/g, "\n").replace(/\r\n/g, "\n"), { mode: 0o600 });
     return f;
   } catch {
     return null;
   }
 }
-
-const hasCookies = () => fs.existsSync("/etc/secrets/cookies.txt") || !!(process.env.YT_COOKIES || process.env.YT_COOKIES_B64);
+const hasCookies = () => !!(process.env.YT_COOKIES || process.env.YT_COOKIES_B64);
 
 const cache = new Map(); // id -> { at, data }
 const inflight = new Map();
