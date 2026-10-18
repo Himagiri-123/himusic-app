@@ -40,14 +40,35 @@ export function ensureYtdlp() {
   return ready;
 }
 
+const SECRET_COOKIE_PATHS = [
+  "/etc/secrets/cookies.txt",
+  path.resolve(process.cwd(), "cookies.txt"),
+];
+
+function findSecretCookieFile() {
+  for (const p of SECRET_COOKIE_PATHS) {
+    try {
+      if (fs.existsSync(p) && fs.statSync(p).size > 0) return p;
+    } catch {}
+  }
+  return null;
+}
+
 function cookieFile() {
-  // Netscape cookies.txt of a (throwaway) Google account: helps when YouTube blocks the server's IP.
-  // Paste it in YT_COOKIES, or base64 of the file in YT_COOKIES_B64 (if the host mangles line breaks).
+  // Reads from Render Secret Files (/etc/secrets/cookies.txt), YT_COOKIES, or YT_COOKIES_B64
   let raw = process.env.YT_COOKIES;
-  if (process.env.YT_COOKIES_B64) {
+  if (!raw && process.env.YT_COOKIES_B64) {
     try {
       raw = Buffer.from(process.env.YT_COOKIES_B64.trim(), "base64").toString("utf8");
     } catch {}
+  }
+  if (!raw) {
+    const secretPath = findSecretCookieFile();
+    if (secretPath) {
+      try {
+        raw = fs.readFileSync(secretPath, "utf8");
+      } catch {}
+    }
   }
   if (!raw) return null;
   const f = path.join(dir, "cookies.txt");
@@ -59,7 +80,8 @@ function cookieFile() {
     return null;
   }
 }
-const hasCookies = () => !!(process.env.YT_COOKIES || process.env.YT_COOKIES_B64);
+
+const hasCookies = () => !!(process.env.YT_COOKIES || process.env.YT_COOKIES_B64 || findSecretCookieFile());
 
 const cache = new Map(); // id -> { at, data }
 const inflight = new Map();
@@ -201,8 +223,8 @@ export async function playlistInfo(url) {
               id: e.id,
               title: e.title,
               artist: (e.uploader || e.channel || "").replace(/ - Topic$/i, ""),
-              thumbnail: `https://i.ytimg.com/vi/${e.id}/mqdefault.jpg`,
               duration: Math.round(e.duration || 0),
+              thumbnail: `https://i.ytimg.com/vi/${e.id}/mqdefault.jpg`,
             })),
         });
       } catch {
