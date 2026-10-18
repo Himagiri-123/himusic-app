@@ -123,6 +123,15 @@ Build it on GitHub (no Android Studio needed):
 - Only change native code (`client/android`) -> push a new tag (v1.0.1, ...) for a new APK; the app then shows an "update" popup too. All builds use the same signing key (`client/android/app/himusic.keystore`), so updates install over the old app. Replace this key with your own secret one if you publish the app publicly.
 - Add `https://*.vercel.app` to `CLIENT_ORIGIN` on Render if you use Vercel preview URLs (wildcards are supported).
 
+## If `/api/music/debug/ytdlp` says "Sign in to confirm you're not a bot"
+YouTube blocks many server IPs (Render included). The server now tries several YouTube "clients" automatically and remembers the one that works (the debug page lists each attempt). If all fail:
+1. Make a **new throwaway Google account** (never your main one).
+2. In a Chrome **incognito** window, log in to youtube.com with it, then export cookies with the "Get cookies.txt LOCALLY" extension (youtube.com only), then close the incognito window.
+3. Render -> Environment: add `YT_COOKIES` = the whole text of the cookies file. If line breaks get lost, add `YT_COOKIES_B64` = base64 of the file instead (PowerShell: `[Convert]::ToBase64String([IO.File]::ReadAllBytes("cookies.txt"))`).
+4. Redeploy and open the debug link again. Cookies can expire after a while; repeat step 2-3 then.
+While yt-dlp is blocked, the app pauses it for 3-10 minutes (so songs do not wait) and uses the backup players; background play is only reliable with the yt-dlp engine working.
+Last resort: run the server on a home PC / Termux phone (a normal home IP is not blocked), or set `YTDLP_PROXY` to a proxy.
+
 ## Install as app
 
 Open the Vercel URL on your phone in Chrome -> menu -> "Install app" / "Add to Home screen".

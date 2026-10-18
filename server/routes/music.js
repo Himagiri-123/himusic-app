@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { Readable } from "node:stream";
-import { ytdlpEnabled, resolveAudio, ytdlpStatus, signAudio, verifyAudio, ensureYtdlp, dropAudio, QUALITIES } from "../ytdlp.js";
+import { ytdlpEnabled, ytdlpDown, resolveAudio, ytdlpStatus, signAudio, verifyAudio, ensureYtdlp, dropAudio, QUALITIES } from "../ytdlp.js";
 
 const router = Router();
 
@@ -438,7 +438,7 @@ router.get("/stream/:id", async (req, res) => {
   try {
     let data;
     // Tier 0: our own yt-dlp engine, streamed through /audio/:id (best for lock-screen playback)
-    if (ytdlpEnabled()) {
+    if (ytdlpEnabled() && !ytdlpDown()) {
       try {
         await resolveAudio(id, q);
         const a = signAudio(id, "audio", q);
@@ -530,7 +530,7 @@ router.get("/debug/ytdlp", async (req, res) => {
   const t = Date.now();
   try {
     await ensureYtdlp();
-    await resolveAudio(id);
+    await resolveAudio(id, "normal", "audio", { force: true });
     res.json({ ok: true, ms: Date.now() - t, ...ytdlpStatus() });
   } catch (e) {
     res.json({ ok: false, error: e.message, ms: Date.now() - t, ...ytdlpStatus() });

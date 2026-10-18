@@ -41,17 +41,25 @@ export function ensureYtdlp() {
 }
 
 function cookieFile() {
-  const raw = process.env.YT_COOKIES; // Netscape cookies.txt content (optional; helps when YouTube blocks the server IP)
+  // Netscape cookies.txt of a (throwaway) Google account: helps when YouTube blocks the server's IP.
+  // Paste it in YT_COOKIES, or base64 of the file in YT_COOKIES_B64 (if the host mangles line breaks).
+  let raw = process.env.YT_COOKIES;
+  if (process.env.YT_COOKIES_B64) {
+    try {
+      raw = Buffer.from(process.env.YT_COOKIES_B64.trim(), "base64").toString("utf8");
+    } catch {}
+  }
   if (!raw) return null;
   const f = path.join(dir, "cookies.txt");
   try {
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(f, raw.replace(/\\n/g, "\n"), { mode: 0o600 });
+    fs.writeFileSync(f, raw.replace(/\\n/g, "\n").replace(/\r\n/g, "\n"), { mode: 0o600 });
     return f;
   } catch {
     return null;
   }
 }
+const hasCookies = () => !!(process.env.YT_COOKIES || process.env.YT_COOKIES_B64);
 
 const cache = new Map(); // id -> { at, data }
 const inflight = new Map();
@@ -69,40 +77,77 @@ const FORMATS = {
 };
 export const QUALITIES = ["low", "normal", "high"];
 
-function run(id, q, kind) {
+// YouTube sometimes answers "Sign in to confirm you're not a bot" to server IPs. Different player
+// "clients" are checked differently, so we try several and remember the one that works.
+const CLIENTS = (process.env.YTDLP_CLIENTS || "default,android_vr,tv,mweb,ios").split(",").map((x) => x.trim()).filter(Boolean);
+let goodClient = null;
+let downUntil = 0; // circuit breaker: after a bot block, skip yt-dlp for a few minutes so playback falls back fast
+let lastAttempts = [];
+const isBlock = (m) => /sign in|not a bot|confirm you|HTTP Error 403|429|Too Many Requests|player response|unavailable on this app/i.test(m);
+const isFinal = (m) => /private video|video unavailable|removed|copyright|age|members-only|premiere/i.test(m) && !isBlock(m);
+
+export function ytdlpDown() {
+  return Date.now() < downUntil;
+}
+
+function execOnce(b, id, q, kind, client) {
   return new Promise((resolve, reject) => {
-    ensureYtdlp().then((b) => {
-      const args = ["-f", FORMATS[kind][q], "--no-playlist", "--no-warnings", "-j", "--no-cache-dir"];
-      const c = cookieFile();
-      if (c) args.push("--cookies", c);
-      if (process.env.YTDLP_PROXY) args.push("--proxy", process.env.YTDLP_PROXY);
-      args.push(`https://www.youtube.com/watch?v=${id}`);
-      execFile(b, args, { timeout: 25_000, maxBuffer: 20 * 1024 * 1024 }, (err, out, errOut) => {
-        if (err) {
-          lastError = String(errOut || err.message).split("\n").filter(Boolean).pop()?.slice(0, 200) || err.message;
-          return reject(new Error(lastError));
-        }
-        try {
-          const j = JSON.parse(out);
-          if (!j.url) throw new Error("no url");
-          lastError = "";
-          resolve({ url: j.url, mime: j.ext === "webm" ? "audio/webm" : "audio/mp4", abr: j.abr || 0, size: j.filesize || j.filesize_approx || 0, headers: j.http_headers || {} });
-        } catch (e) {
-          reject(new Error("could not parse yt-dlp output"));
-        }
-      });
-    }, reject);
+    const args = ["-f", FORMATS[kind][q], "--no-playlist", "--no-warnings", "-j", "--no-cache-dir", "--socket-timeout", "10"];
+    if (client && client !== "default") args.push("--extractor-args", `youtube:player_client=${client}`);
+    const c = cookieFile();
+    if (c) args.push("--cookies", c);
+    if (process.env.YTDLP_PROXY) args.push("--proxy", process.env.YTDLP_PROXY);
+    args.push(`https://www.youtube.com/watch?v=${id}`);
+    execFile(b, args, { timeout: 15_000, maxBuffer: 20 * 1024 * 1024 }, (err, out, errOut) => {
+      if (err) return reject(new Error(String(errOut || err.message).split("\n").filter(Boolean).pop()?.slice(0, 220) || err.message));
+      try {
+        const j = JSON.parse(out);
+        if (!j.url) throw new Error("no url");
+        resolve({ url: j.url, mime: j.ext === "webm" ? "audio/webm" : "audio/mp4", abr: j.abr || 0, size: j.filesize || j.filesize_approx || 0, headers: j.http_headers || {} });
+      } catch {
+        reject(new Error("could not parse yt-dlp output"));
+      }
+    });
   });
 }
 
-export function resolveAudio(id, q = "normal", kind = "audio") {
+async function run(id, q, kind, { force = false } = {}) {
+  if (!force && ytdlpDown()) throw new Error(lastError || "yt-dlp is paused after a YouTube block");
+  const b = await ensureYtdlp();
+  const order = goodClient ? [goodClient, ...CLIENTS.filter((c) => c !== goodClient)] : CLIENTS;
+  const started = Date.now();
+  const attempts = [];
+  let last = "";
+  for (const client of order) {
+    if (Date.now() - started > 24_000) break;
+    try {
+      const r = await execOnce(b, id, q, kind, client);
+      goodClient = client;
+      lastError = "";
+      downUntil = 0;
+      attempts.push({ client, ok: true });
+      lastAttempts = attempts;
+      return r;
+    } catch (e) {
+      last = e.message;
+      attempts.push({ client, ok: false, error: e.message.slice(0, 120) });
+      if (isFinal(e.message)) break; // this video itself cannot be played, other clients will not help
+    }
+  }
+  lastAttempts = attempts;
+  lastError = last;
+  if (isBlock(last)) downUntil = Date.now() + (hasCookies() ? 3 : 10) * 60 * 1000;
+  throw new Error(last || "yt-dlp failed");
+}
+
+export function resolveAudio(id, q = "normal", kind = "audio", opts) {
   if (!QUALITIES.includes(q)) q = "normal";
   if (kind !== "video") kind = "audio";
   const key = `${id}|${kind}|${q}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < TTL) return Promise.resolve(hit.data);
   if (inflight.has(key)) return inflight.get(key);
-  const p = run(id, q, kind)
+  const p = run(id, q, kind, opts)
     .then((data) => {
       if (cache.size > 300) cache.clear();
       cache.set(key, { at: Date.now(), data });
@@ -118,7 +163,7 @@ export function dropAudio(id, q = "normal", kind = "audio") {
 }
 
 export function ytdlpStatus() {
-  return { enabled: ytdlpEnabled(), installed: fs.existsSync(bin()), lastError, cookies: !!process.env.YT_COOKIES, proxy: !!process.env.YTDLP_PROXY };
+  return { enabled: ytdlpEnabled(), installed: fs.existsSync(bin()), lastError, cookies: hasCookies(), proxy: !!process.env.YTDLP_PROXY, workingClient: goodClient, pausedForSeconds: Math.max(0, Math.round((downUntil - Date.now()) / 1000)), attempts: lastAttempts };
 }
 
 /* ---- signed URLs for the <audio> element (it cannot send an Authorization header) ---- */
