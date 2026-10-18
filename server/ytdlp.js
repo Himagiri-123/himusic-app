@@ -1,6 +1,14 @@
 // Own audio engine: yt-dlp resolves a YouTube video to a direct audio URL, and our server
 // streams it to the app's <audio> element (range requests supported). This is what makes
 // lock-screen / background playback work, because the browser sees a normal audio file.
+const fs = require('fs');
+
+// Render లో ఉన్న Base64 కోడ్ ని నార్మల్ కుకీస్ టెక్స్ట్ లాగా మార్చి ఫైల్ క్రియేట్ చేస్తుంది
+if (process.env.YOUTUBE_COOKIES) {
+    const decodedCookies = Buffer.from(process.env.YOUTUBE_COOKIES, 'base64').toString('utf-8');
+    fs.writeFileSync('cookies.txt', decodedCookies);
+}
+
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
