@@ -44,12 +44,12 @@ jobs:
         working-directory: client
         run: node scripts/cap-sync.mjs
 
-      - name: Build APK
+      - name: Build APK (Debug Mode)
         working-directory: client/android
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon -PappVersionName="1.0.0" -PappVersionCode="${{ github.run_number }}"
-          cp app/build/outputs/apk/release/app-release.apk ../../HiMusic.apk
+          ./gradlew assembleDebug --no-daemon -PappVersionName="1.0.0" -PappVersionCode="${{ github.run_number }}"
+          cp app/build/outputs/apk/debug/app-debug.apk ../../HiMusic.apk
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
