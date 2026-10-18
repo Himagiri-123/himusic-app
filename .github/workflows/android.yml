@@ -1,17 +1,9 @@
 name: Build Android app (APK)
 
-# Run it: push a tag like v1.0.0  (git tag v1.0.0 && git push origin v1.0.0)
-# or GitHub -> Actions -> "Build Android app" -> Run workflow.
-# The APK appears under Releases as HiMusic.apk.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
-    inputs:
-      version:
-        description: "Version number, e.g. 1.0.1"
-        required: true
-        default: "1.0.0"
 
 permissions:
   contents: write
@@ -19,6 +11,11 @@ permissions:
 jobs:
   apk:
     runs-on: ubuntu-latest
+    env:
+      APP_URL: ${{ vars.APP_URL }}
+      API_URL: ${{ vars.API_URL }}
+      CAP_SERVER_URL: ${{ vars.APP_URL }}
+      VITE_API_URL: ${{ vars.API_URL }}
     steps:
       - uses: actions/checkout@v4
 
@@ -37,41 +34,26 @@ jobs:
         with:
           packages: 'platform-tools cmdline-tools;latest build-tools;33.0.2'
 
-      - name: Version
-        id: v
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then V="${{ github.event.inputs.version }}"; else V="${GITHUB_REF_NAME#v}"; fi
-          if [ -z "$V" ] || [ "$V" = "main" ]; then V="1.0.0"; fi
-          echo "name=$V" >> "$GITHUB_OUTPUT"
-          echo "tag=v$V" >> "$GITHUB_OUTPUT"
-
       - name: Build web app
         working-directory: client
-        env:
-          VITE_API_URL: ${{ vars.API_URL }}
         run: |
           npm ci
           npx vite build
 
       - name: Copy web app into Android project
         working-directory: client
-        env:
-          CAP_SERVER_URL: ${{ vars.APP_URL }}
         run: node scripts/cap-sync.mjs
 
       - name: Build APK
         working-directory: client/android
-        env:
-          APP_URL: ${{ vars.APP_URL }}
-          API_URL: ${{ vars.API_URL }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon -PappVersionName="${{ steps.v.outputs.name }}" -PappVersionCode="${{ github.run_number }}"
+          ./gradlew assembleRelease --no-daemon -PappVersionName="1.0.0" -PappVersionCode="${{ github.run_number }}"
           cp app/build/outputs/apk/release/app-release.apk ../../HiMusic.apk
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.v.outputs.tag }}
-          name: HiMusic ${{ steps.v.outputs.name }}
+          tag_name: "v1.0.0-b${{ github.run_number }}"
+          name: "HiMusic Release (Build ${{ github.run_number }})"
           files: HiMusic.apk
