@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useApp } from "../store.jsx";
 import { usePlayer } from "../PlayerContext.jsx";
 import { useDownloads } from "../downloads.jsx";
@@ -5,6 +6,7 @@ import { EQ_PRESETS, connectionKind, resolveQuality, useSettings } from "../sett
 import Icon from "./Icon.jsx";
 import { isNative } from "../native.js";
 import { apkUrl } from "./UpdatePrompt.jsx";
+import Diagnostics from "./Diagnostics.jsx";
 
 const Seg = ({ value, options, onChange }) => (
   <div className="seg">
@@ -37,6 +39,7 @@ export default function Settings() {
   const { user, logout, setWrappedOpen, setImportOpen } = useApp();
   const p = usePlayer();
   const dl = useDownloads();
+  const [diag, setDiag] = useState(false);
   if (!s.open) return null;
   const close = () => s.setOpen(false);
   // Check the release first, so the user sees a clear message instead of GitHub's 404 page
@@ -125,12 +128,16 @@ export default function Settings() {
               <Icon name="install" size={24} /> <span>Download Android App</span>
             </a>
           )}
+          <button className="sheet-item" onClick={() => setDiag(true)}>
+            <Icon name="star" size={24} /> <span>Playback self-test (troubleshoot)</span>
+          </button>
           <p className="sub small set-version">HiMusic v{__APP_VERSION__}{isNative ? " (Android app)" : ""}</p>
           <button className="sheet-item danger" onClick={() => { close(); logout(); }}>
             <Icon name="logout" size={24} /> <span>Log out {user?.email ? `(${user.email})` : ""}</span>
           </button>
         </div>
       </div>
+      {diag && <Diagnostics onClose={() => setDiag(false)} />}
     </div>
   );
 }

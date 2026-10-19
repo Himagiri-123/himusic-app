@@ -20,6 +20,8 @@ export const nativeMedia = {
   },
 };
 
+export const nativeStatus = () => (MC ? MC.status().catch((e) => ({ error: String(e?.message || e) })) : Promise.resolve(null));
+
 export async function installedVersion() {
   try {
     return (await AppPlugin.getInfo()).version;

@@ -1,11 +1,14 @@
 package com.himusic.app;
 
 import android.Manifest;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
+import android.os.PowerManager;
 
 import androidx.core.app.ActivityCompat;
+import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.ContextCompat;
 
 import com.getcapacitor.JSObject;
@@ -57,6 +60,19 @@ public class MediaControlsPlugin extends Plugin {
         } catch (Exception e) {
             call.reject(String.valueOf(e.getMessage()));
         }
+    }
+
+    @PluginMethod
+    public void status(PluginCall call) {
+        JSObject o = new JSObject();
+        o.put("sdk", Build.VERSION.SDK_INT);
+        boolean permission = Build.VERSION.SDK_INT < 33
+                || ContextCompat.checkSelfPermission(getContext(), Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
+        o.put("notificationsAllowed", permission && NotificationManagerCompat.from(getContext()).areNotificationsEnabled());
+        PowerManager pm = (PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
+        o.put("batteryUnrestricted", pm != null && pm.isIgnoringBatteryOptimizations(getContext().getPackageName()));
+        o.put("serviceRunning", MediaService.running);
+        call.resolve(o);
     }
 
     @PluginMethod

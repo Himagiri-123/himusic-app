@@ -31,6 +31,7 @@ async function request(path, { method = "GET", body } = {}) {
   return data;
 }
 
+export const API_BASE = BASE;
 const enc = encodeURIComponent;
 
 export const api = {
