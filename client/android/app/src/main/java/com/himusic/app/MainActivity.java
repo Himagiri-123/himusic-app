@@ -18,6 +18,15 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
+    // Back button: go back inside the app, and at the first screen send the app to the background
+    // instead of closing it. Closing the activity destroys the web player and stops the music.
+    @Override
+    public void onBackPressed() {
+        WebView wv = getBridge() != null ? getBridge().getWebView() : null;
+        if (wv != null && wv.canGoBack()) wv.goBack();
+        else moveTaskToBack(true);
+    }
+
     @Override
     public void onPause() {
         super.onPause();

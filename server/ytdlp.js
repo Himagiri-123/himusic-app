@@ -1,6 +1,6 @@
-// Smart Audio Engine: Resolves YouTube video IDs to direct M4A/MP4 audio streams
-// using YouTube oEmbed + JioSaavn CDN (for instant, block-free background playback on Render)
-// with yt-dlp fallback.
+// Own audio engine: yt-dlp resolves a YouTube video to a direct audio URL, and our server
+// streams it to the app's <audio> element (range requests supported). This is what makes
+// lock-screen / background playback work, because the browser sees a normal audio file.
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -11,8 +11,6 @@ const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), "bin");
 const bin = () => process.env.YTDLP_PATH || path.join(dir, "yt-dlp");
 const DL = process.env.YTDLP_DOWNLOAD_URL || "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux";
 
-const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-
 let ready = null;
 let lastError = "";
 
@@ -20,6 +18,7 @@ export function ytdlpEnabled() {
   return process.env.YTDLP_DISABLE !== "true";
 }
 
+// download the standalone binary once (first use); a custom YTDLP_PATH skips the download
 export function ensureYtdlp() {
   if (!ytdlpEnabled()) return Promise.reject(new Error("yt-dlp disabled"));
   if (ready) return ready;
@@ -35,40 +34,28 @@ export function ensureYtdlp() {
     return bin();
   })().catch((e) => {
     lastError = e.message;
-    ready = null;
+    ready = null; // allow a retry later
     throw e;
   });
   return ready;
 }
 
-const SECRET_COOKIE_PATHS = [
-  "/etc/secrets/cookies.txt",
-  path.resolve(process.cwd(), "cookies.txt"),
-];
-
-function findSecretCookieFile() {
-  for (const p of SECRET_COOKIE_PATHS) {
-    try {
-      if (fs.existsSync(p) && fs.statSync(p).size > 0) return p;
-    } catch {}
-  }
-  return null;
-}
-
 function cookieFile() {
+  // Netscape cookies.txt of a (throwaway) Google account: helps when YouTube blocks the server's IP.
+  // Paste it in YT_COOKIES, or base64 of the file in YT_COOKIES_B64 (if the host mangles line breaks).
   let raw = process.env.YT_COOKIES;
-  if (!raw && process.env.YT_COOKIES_B64) {
+  // Render "Secret Files": add a file named cookies.txt and it appears at /etc/secrets/cookies.txt
+  for (const p of [process.env.YT_COOKIES_FILE, "/etc/secrets/cookies.txt", path.join(path.dirname(dir), "cookies.txt")]) {
+    if (!raw && p && fs.existsSync(p)) {
+      try {
+        raw = fs.readFileSync(p, "utf8");
+      } catch {}
+    }
+  }
+  if (process.env.YT_COOKIES_B64) {
     try {
       raw = Buffer.from(process.env.YT_COOKIES_B64.trim(), "base64").toString("utf8");
     } catch {}
-  }
-  if (!raw) {
-    const secretPath = findSecretCookieFile();
-    if (secretPath) {
-      try {
-        raw = fs.readFileSync(secretPath, "utf8");
-      } catch {}
-    }
   }
   if (!raw) return null;
   const f = path.join(dir, "cookies.txt");
@@ -80,206 +67,105 @@ function cookieFile() {
     return null;
   }
 }
+const hasCookies = () => {
+  try {
+    return !!cookieFile();
+  } catch {
+    return false;
+  }
+};
+// quick sanity check of the cookie file, shown on the debug page (never shows the values)
+function cookieInfo() {
+  const f = cookieFile();
+  if (!f) return null;
+  const txt = fs.readFileSync(f, "utf8");
+  const lines = txt.split("\n").filter((l) => l && !l.startsWith("#"));
+  const names = new Set(lines.map((l) => l.split("\t")[5]));
+  return {
+    cookieLines: lines.length,
+    youtubeLines: lines.filter((l) => /youtube\.com/.test(l)).length,
+    loggedIn: ["__Secure-3PSID", "SAPISID", "LOGIN_INFO", "__Secure-1PSID"].some((n) => names.has(n)),
+    looksLikeNetscape: /Netscape HTTP Cookie File|^\S+\t(TRUE|FALSE)\t/m.test(txt),
+  };
+}
 
-const hasCookies = () => !!(process.env.YT_COOKIES || process.env.YT_COOKIES_B64 || findSecretCookieFile());
-
-const cache = new Map();
+const cache = new Map(); // id -> { at, data }
 const inflight = new Map();
 const TTL = 30 * 60 * 1000;
 
+// quality -> yt-dlp format selector. low ~48-70 kbps (saves mobile data), normal ~128 kbps, high = best audio
+const FORMATS = {
+  audio: {
+    low: "ba[abr<=70]/wa",
+    normal: "ba[ext=m4a][abr<=140]/ba[abr<=140]/ba",
+    high: "ba",
+  },
+  // video = 360p-480p muxed file (audio + picture in one), small and simple to proxy
+  video: { low: "18/b[ext=mp4][height<=480]/b", normal: "18/b[ext=mp4][height<=480]/b", high: "18/b[ext=mp4][height<=480]/b" },
+};
 export const QUALITIES = ["low", "normal", "high"];
 
-let goodClient = "saavn-cdn";
-let downUntil = 0;
+// YouTube sometimes answers "Sign in to confirm you're not a bot" to server IPs. Different player
+// "clients" are checked differently, so we try several and remember the one that works.
+const CLIENTS = (process.env.YTDLP_CLIENTS || "default,android_vr,tv,mweb,ios").split(",").map((x) => x.trim()).filter(Boolean);
+let goodClient = null;
+let downUntil = 0; // circuit breaker: after a bot block, skip yt-dlp for a few minutes so playback falls back fast
 let lastAttempts = [];
+const isBlock = (m) => /sign in|not a bot|confirm you|HTTP Error 403|429|Too Many Requests|player response|unavailable on this app/i.test(m);
+const isFinal = (m) => /private video|video unavailable|removed|copyright|age|members-only|premiere/i.test(m) && !isBlock(m);
 
 export function ytdlpDown() {
   return Date.now() < downUntil;
 }
 
-/* ---- Step 1: Get Song Title from YouTube Official oEmbed (Never Blocked) ---- */
-async function getYouTubeMeta(id) {
-  const urls = [
-    `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`,
-    `https://noembed.com/embed?url=https://www.youtube.com/watch?v=${id}`,
-  ];
-  for (const u of urls) {
-    try {
-      const r = await fetch(u, {
-        headers: { "User-Agent": UA },
-        signal: AbortSignal.timeout(5000),
-      });
-      if (!r.ok) continue;
-      const j = await r.json();
-      if (j && j.title) {
-        return {
-          title: j.title,
-          author: (j.author_name || "").replace(/ - Topic$/i, "").trim(),
-        };
+function execOnce(b, id, q, kind, client) {
+  return new Promise((resolve, reject) => {
+    const args = ["-f", FORMATS[kind][q], "--no-playlist", "--no-warnings", "-j", "--no-cache-dir", "--socket-timeout", "10"];
+    if (client && client !== "default") args.push("--extractor-args", `youtube:player_client=${client}`);
+    const c = cookieFile();
+    if (c) args.push("--cookies", c);
+    if (process.env.YTDLP_PROXY) args.push("--proxy", process.env.YTDLP_PROXY);
+    args.push(`https://www.youtube.com/watch?v=${id}`);
+    execFile(b, args, { timeout: 15_000, maxBuffer: 20 * 1024 * 1024 }, (err, out, errOut) => {
+      if (err) return reject(new Error(String(errOut || err.message).split("\n").filter(Boolean).pop()?.slice(0, 220) || err.message));
+      try {
+        const j = JSON.parse(out);
+        if (!j.url) throw new Error("no url");
+        resolve({ url: j.url, mime: j.ext === "webm" ? "audio/webm" : "audio/mp4", abr: j.abr || 0, size: j.filesize || j.filesize_approx || 0, headers: j.http_headers || {} });
+      } catch {
+        reject(new Error("could not parse yt-dlp output"));
       }
-    } catch {}
-  }
-  return null;
-}
-
-function buildSearchQueries(meta) {
-  if (!meta || !meta.title) return ["Latest Telugu Hit Song"];
-  let cleaned = meta.title
-    .replace(/\([^)]*\)|\[[^\]]*\]|\{[^}]*\}/g, " ")
-    .replace(/\b(official|full|video|audio|lyrical|lyrics|song|hd|4k|8k|hq|mv|teaser|trailer|jukebox|with lyrics)\b/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  const parts = cleaned
-    .split(/[|\-–—:/]+/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 2);
-
-  const queries = [];
-  if (parts.length >= 2) {
-    queries.push(`${parts[0]} ${parts[1]}`);
-  }
-  if (parts.length >= 1) {
-    queries.push(parts[0]);
-  }
-  const shortWords = cleaned.split(" ").slice(0, 5).join(" ").trim();
-  if (shortWords && !queries.includes(shortWords)) {
-    queries.push(shortWords);
-  }
-  if (meta.author && parts[0]) {
-    queries.push(`${parts[0]} ${meta.author}`);
-  }
-  return queries.length ? queries : [meta.title];
-}
-
-/* ---- Step 2: Resolve Full Direct M4A Stream from JioSaavn CDN ---- */
-const SAAVN_WRAPPERS = [
-  "https://saavn.sumit.co/api/search/songs?query=",
-  "https://saavn.dev/api/search/songs?query=",
-  "https://jiosaavn-api-privatecvc2.vercel.app/search/songs?query=",
-];
-
-async function searchSaavnWrapper(baseUrl, query, q) {
-  const r = await fetch(`${baseUrl}${encodeURIComponent(query)}`, {
-    headers: { "User-Agent": UA, Accept: "application/json" },
-    signal: AbortSignal.timeout(5000),
+    });
   });
-  if (!r.ok) throw new Error(`wrapper ${r.status}`);
-  const j = await r.json();
-  const results = j?.data?.results || j?.results || [];
-  if (!results.length) throw new Error("no results");
-
-  const dls = results[0]?.downloadUrl || [];
-  if (!dls.length) throw new Error("no downloadUrl");
-
-  const targetQ = q === "low" ? "96kbps" : q === "high" ? "320kbps" : "160kbps";
-  const picked =
-    dls.find((d) => d.quality === targetQ) ||
-    dls.find((d) => d.quality === "160kbps") ||
-    dls[dls.length - 1];
-
-  const streamUrl = picked?.url || picked?.link;
-  if (!streamUrl) throw new Error("empty stream url");
-
-  return {
-    url: streamUrl,
-    mime: "audio/mp4",
-    abr: q === "low" ? 96 : q === "high" ? 320 : 160,
-    size: 0,
-    headers: { "User-Agent": UA },
-    source: "saavn-cdn",
-  };
 }
 
-async function searchSaavnDirect(query, q) {
-  const apiUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&_marker=0&cc=in&includeMetaTags=1&q=${encodeURIComponent(query)}`;
-  const r = await fetch(apiUrl, {
-    headers: { "User-Agent": UA, Accept: "application/json" },
-    signal: AbortSignal.timeout(5000),
-  });
-  if (!r.ok) throw new Error(`saavn direct ${r.status}`);
-  const j = await r.json();
-  const results = j?.results || [];
-  for (const item of results) {
-    const preview = item?.media_preview_url || item?.more_info?.vlink;
-    if (preview && preview.includes("saavncdn.com")) {
-      const suffix = q === "low" ? "_96.mp4" : "_160.mp4";
-      const fullUrl = preview
-        .replace("preview.saavncdn.com", "aac.saavncdn.com")
-        .replace(/_96_p\.mp4$/, suffix);
-      return {
-        url: fullUrl,
-        mime: "audio/mp4",
-        abr: q === "low" ? 96 : 160,
-        size: 0,
-        headers: { "User-Agent": UA },
-        source: "jiosaavn-direct",
-      };
+async function run(id, q, kind, { force = false } = {}) {
+  if (!force && ytdlpDown()) throw new Error(lastError || "yt-dlp is paused after a YouTube block");
+  const b = await ensureYtdlp();
+  const order = goodClient ? [goodClient, ...CLIENTS.filter((c) => c !== goodClient)] : CLIENTS;
+  const started = Date.now();
+  const attempts = [];
+  let last = "";
+  for (const client of order) {
+    if (Date.now() - started > 24_000) break;
+    try {
+      const r = await execOnce(b, id, q, kind, client);
+      goodClient = client;
+      lastError = "";
+      downUntil = 0;
+      attempts.push({ client, ok: true });
+      lastAttempts = attempts;
+      return r;
+    } catch (e) {
+      last = e.message;
+      attempts.push({ client, ok: false, error: e.message.slice(0, 120) });
+      if (isFinal(e.message)) break; // this video itself cannot be played, other clients will not help
     }
   }
-  throw new Error("no direct saavn stream");
-}
-
-/* ---- Step 3: iTunes Global M4A Fallback (Guarantees 100% uptime) ---- */
-async function searchItunesFallback(query) {
-  const r = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=music&limit=3`, {
-    headers: { "User-Agent": UA },
-    signal: AbortSignal.timeout(5000),
-  });
-  if (!r.ok) throw new Error(`itunes ${r.status}`);
-  const j = await r.json();
-  const item = (j?.results || []).find((x) => x.previewUrl);
-  if (!item) throw new Error("no itunes stream");
-  return {
-    url: item.previewUrl,
-    mime: "audio/mp4",
-    abr: 128,
-    size: 0,
-    headers: { "User-Agent": UA },
-    source: "itunes-cdn",
-  };
-}
-
-async function resolveFastAudio(id, q) {
-  const meta = await getYouTubeMeta(id);
-  const queries = buildSearchQueries(meta);
-
-  for (const query of queries) {
-    // 1. Try direct official JioSaavn API + Wrappers
-    try {
-      return await Promise.any([
-        searchSaavnDirect(query, q),
-        ...SAAVN_WRAPPERS.map((w) => searchSaavnWrapper(w, query, q)),
-      ]);
-    } catch {}
-  }
-
-  // 2. Try iTunes CDN fallback
-  for (const query of queries) {
-    try {
-      return await searchItunesFallback(query);
-    } catch {}
-  }
-
- throw new Error("no matching stream found");
-}
-
-async function run(id, q, kind) {
-  const attempts = [];
-  try {
-    const res = await resolveFastAudio(id, q);
-    goodClient = res.source || "saavn-cdn";
-    lastError = "";
-    downUntil = 0;
-    attempts.push({ client: goodClient, ok: true });
-    lastAttempts = attempts;
-    return res;
-  } catch (e) {
-    lastError = e.message;
-    attempts.push({ client: "fast-cdn", ok: false, error: e.message.slice(0, 120) });
-    lastAttempts = attempts;
-    throw e;
-  }
+  lastAttempts = attempts;
+  lastError = last;
+  if (isBlock(last)) downUntil = Date.now() + (hasCookies() ? 3 : 10) * 60 * 1000;
+  throw new Error(last || "yt-dlp failed");
 }
 
 export function resolveAudio(id, q = "normal", kind = "audio", opts) {
@@ -305,27 +191,16 @@ export function dropAudio(id, q = "normal", kind = "audio") {
 }
 
 export function ytdlpStatus() {
-  return {
-    enabled: ytdlpEnabled(),
-    installed: true,
-    lastError,
-    cookies: hasCookies(),
-    proxy: !!process.env.YTDLP_PROXY,
-    workingClient: goodClient,
-    pausedForSeconds: 0,
-    attempts: lastAttempts,
-  };
+  return { enabled: ytdlpEnabled(), installed: fs.existsSync(bin()), lastError, cookies: hasCookies(), cookieInfo: cookieInfo(), proxy: !!process.env.YTDLP_PROXY, workingClient: goodClient, pausedForSeconds: Math.max(0, Math.round((downUntil - Date.now()) / 1000)), attempts: lastAttempts };
 }
 
-/* ---- signed URLs for the <audio> element ---- */
+/* ---- signed URLs for the <audio> element (it cannot send an Authorization header) ---- */
 const mac = (id, kind, q, exp) =>
   crypto.createHmac("sha256", process.env.JWT_SECRET || "").update(`audio|${id}|${kind}|${q}|${exp}`).digest("hex").slice(0, 32);
-
 export function signAudio(id, kind = "audio", q = "normal", ttlMs = 6 * 3600_000) {
   const exp = Date.now() + ttlMs;
   return { exp, sig: mac(id, kind, q, exp) };
 }
-
 export function verifyAudio(id, kind, q, exp, sig) {
   if (!(Number(exp) > Date.now()) || typeof sig !== "string") return false;
   const good = mac(id, kind, q, Number(exp));
@@ -333,6 +208,7 @@ export function verifyAudio(id, kind, q, exp, sig) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+// list the songs of a public YouTube playlist (no download), used by "import playlist"
 export async function playlistInfo(url) {
   const b = await ensureYtdlp();
   const args = ["--flat-playlist", "-J", "--no-warnings", "--playlist-end", "200", "--no-cache-dir"];
@@ -353,8 +229,8 @@ export async function playlistInfo(url) {
               id: e.id,
               title: e.title,
               artist: (e.uploader || e.channel || "").replace(/ - Topic$/i, ""),
-              duration: Math.round(e.duration || 0),
               thumbnail: `https://i.ytimg.com/vi/${e.id}/mqdefault.jpg`,
+              duration: Math.round(e.duration || 0),
             })),
         });
       } catch {
