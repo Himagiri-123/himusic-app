@@ -40,35 +40,22 @@ export function ensureYtdlp() {
   return ready;
 }
 
-const SECRET_COOKIE_PATHS = [
-  "/etc/secrets/cookies.txt",
-  path.resolve(process.cwd(), "cookies.txt"),
-];
-
-function findSecretCookieFile() {
-  for (const p of SECRET_COOKIE_PATHS) {
-    try {
-      if (fs.existsSync(p) && fs.statSync(p).size > 0) return p;
-    } catch {}
-  }
-  return null;
-}
-
 function cookieFile() {
-  // Reads from Render Secret Files (/etc/secrets/cookies.txt), YT_COOKIES, or YT_COOKIES_B64
+  // Netscape cookies.txt of a (throwaway) Google account: helps when YouTube blocks the server's IP.
+  // Paste it in YT_COOKIES, or base64 of the file in YT_COOKIES_B64 (if the host mangles line breaks).
   let raw = process.env.YT_COOKIES;
-  if (!raw && process.env.YT_COOKIES_B64) {
+  // Render "Secret Files": add a file named cookies.txt and it appears at /etc/secrets/cookies.txt
+  for (const p of [process.env.YT_COOKIES_FILE, "/etc/secrets/cookies.txt", path.join(path.dirname(dir), "cookies.txt")]) {
+    if (!raw && p && fs.existsSync(p)) {
+      try {
+        raw = fs.readFileSync(p, "utf8");
+      } catch {}
+    }
+  }
+  if (process.env.YT_COOKIES_B64) {
     try {
       raw = Buffer.from(process.env.YT_COOKIES_B64.trim(), "base64").toString("utf8");
     } catch {}
-  }
-  if (!raw) {
-    const secretPath = findSecretCookieFile();
-    if (secretPath) {
-      try {
-        raw = fs.readFileSync(secretPath, "utf8");
-      } catch {}
-    }
   }
   if (!raw) return null;
   const f = path.join(dir, "cookies.txt");
@@ -80,8 +67,27 @@ function cookieFile() {
     return null;
   }
 }
-
-const hasCookies = () => !!(process.env.YT_COOKIES || process.env.YT_COOKIES_B64 || findSecretCookieFile());
+const hasCookies = () => {
+  try {
+    return !!cookieFile();
+  } catch {
+    return false;
+  }
+};
+// quick sanity check of the cookie file, shown on the debug page (never shows the values)
+function cookieInfo() {
+  const f = cookieFile();
+  if (!f) return null;
+  const txt = fs.readFileSync(f, "utf8");
+  const lines = txt.split("\n").filter((l) => l && !l.startsWith("#"));
+  const names = new Set(lines.map((l) => l.split("\t")[5]));
+  return {
+    cookieLines: lines.length,
+    youtubeLines: lines.filter((l) => /youtube\.com/.test(l)).length,
+    loggedIn: ["__Secure-3PSID", "SAPISID", "LOGIN_INFO", "__Secure-1PSID"].some((n) => names.has(n)),
+    looksLikeNetscape: /Netscape HTTP Cookie File|^\S+\t(TRUE|FALSE)\t/m.test(txt),
+  };
+}
 
 const cache = new Map(); // id -> { at, data }
 const inflight = new Map();
@@ -185,7 +191,7 @@ export function dropAudio(id, q = "normal", kind = "audio") {
 }
 
 export function ytdlpStatus() {
-  return { enabled: ytdlpEnabled(), installed: fs.existsSync(bin()), lastError, cookies: hasCookies(), proxy: !!process.env.YTDLP_PROXY, workingClient: goodClient, pausedForSeconds: Math.max(0, Math.round((downUntil - Date.now()) / 1000)), attempts: lastAttempts };
+  return { enabled: ytdlpEnabled(), installed: fs.existsSync(bin()), lastError, cookies: hasCookies(), cookieInfo: cookieInfo(), proxy: !!process.env.YTDLP_PROXY, workingClient: goodClient, pausedForSeconds: Math.max(0, Math.round((downUntil - Date.now()) / 1000)), attempts: lastAttempts };
 }
 
 /* ---- signed URLs for the <audio> element (it cannot send an Authorization header) ---- */
@@ -223,8 +229,8 @@ export async function playlistInfo(url) {
               id: e.id,
               title: e.title,
               artist: (e.uploader || e.channel || "").replace(/ - Topic$/i, ""),
-              duration: Math.round(e.duration || 0),
               thumbnail: `https://i.ytimg.com/vi/${e.id}/mqdefault.jpg`,
+              duration: Math.round(e.duration || 0),
             })),
         });
       } catch {

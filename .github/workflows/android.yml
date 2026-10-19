@@ -48,12 +48,12 @@ jobs:
         working-directory: client/android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon -PappVersionName="1.0.0" -PappVersionCode="${{ github.run_number }}"
+          ./gradlew assembleDebug --no-daemon -PappVersionName="1.0.${{ github.run_number }}" -PappVersionCode="${{ github.run_number }}"
           cp app/build/outputs/apk/debug/app-debug.apk ../../HiMusic.apk
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "v1.0.0-b${{ github.run_number }}"
-          name: "HiMusic Release (Build ${{ github.run_number }})"
+          tag_name: "v1.0.${{ github.run_number }}"
+          name: "HiMusic 1.0.${{ github.run_number }}"
           files: HiMusic.apk

@@ -49,7 +49,10 @@ public class MediaControlsPlugin extends Plugin {
             i.putExtra("playing", Boolean.TRUE.equals(call.getBoolean("playing", false)));
             i.putExtra("position", call.getDouble("position", 0.0).longValue());
             i.putExtra("duration", call.getDouble("duration", 0.0).longValue());
-            ContextCompat.startForegroundService(getContext(), i);
+            // Android 12+ forbids *starting* a foreground service from the background (e.g. when the next song
+            // starts with the screen off). Once it runs we only need to send it new data.
+            if (MediaService.running) getContext().startService(i);
+            else ContextCompat.startForegroundService(getContext(), i);
             call.resolve();
         } catch (Exception e) {
             call.reject(String.valueOf(e.getMessage()));

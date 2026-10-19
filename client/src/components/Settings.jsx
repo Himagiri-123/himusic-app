@@ -39,6 +39,24 @@ export default function Settings() {
   const dl = useDownloads();
   if (!s.open) return null;
   const close = () => s.setOpen(false);
+  // Check the release first, so the user sees a clear message instead of GitHub's 404 page
+  const downloadApk = async (e) => {
+    e.preventDefault();
+    const url = apkUrl();
+    if (!url) return alert("The Android app link is not set up yet. Add VITE_GITHUB_REPO on Vercel (see README: Android app).");
+    const repo = import.meta.env.VITE_GITHUB_REPO;
+    try {
+      const r = await fetch(`https://api.github.com/repos/${repo}/releases/latest`);
+      if (r.status === 404)
+        return alert(`No APK found for "${repo}".\n\nEither the repo is private / the name is wrong, or the APK has not been built yet.\nOn GitHub: Actions -> "Build Android app" -> Run workflow, then wait until it is green.`);
+      const rel = r.ok ? await r.json() : null;
+      const asset = rel?.assets?.find((a) => a.name.endsWith(".apk"));
+      if (r.ok && !asset) return alert("A release exists but has no HiMusic.apk yet. Check the Actions run for errors.");
+      window.location.href = asset?.browser_download_url || url;
+    } catch {
+      window.location.href = url;
+    }
+  };
   const kind = connectionKind();
   const q = resolveQuality(s.quality);
 
@@ -103,7 +121,7 @@ export default function Settings() {
             <Icon name="importList" size={24} /> <span>Import a playlist (YouTube / Spotify)</span>
           </button>
           {!isNative && (
-            <a className="sheet-item" href={apkUrl() || undefined} onClick={(e) => !apkUrl() && (e.preventDefault(), alert("The Android app link is not set up yet. See README: 'Android app'."))}>
+            <a className="sheet-item" href={apkUrl() || undefined} onClick={downloadApk}>
               <Icon name="install" size={24} /> <span>Download Android App</span>
             </a>
           )}

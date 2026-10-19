@@ -142,3 +142,13 @@ Open the Vercel URL on your phone in Chrome -> menu -> "Install app" / "Add to H
 - Player engines: **Auto** tries the direct ad-free stream first and falls back to the official YouTube player (IFrame API) when Piped/Invidious fail. **YouTube** always uses the YouTube player (toggle in the full player). In the YouTube player, ads are blocked only if your browser blocks them (Brave does), audio-only does not save data, and background play on a locked phone screen is not guaranteed.
 - Song not playing? Open `<your-backend-url>/api/music/debug` in the browser. It shows which instances work from your server (ok true/false with the error). If all fail, set working instances in `PIPED_INSTANCES` / `INVIDIOUS_INSTANCES`.
 - Streaming from YouTube through third-party front-ends may go against YouTube's Terms of Service. Use for personal or learning purposes.
+
+
+## Fixing the YouTube bot block (cookies via Render Secret Files)
+1. In a private/incognito window sign in to YouTube with a throwaway Google account, then export youtube.com cookies as `cookies.txt` (extension "Get cookies.txt LOCALLY"), close the window.
+2. Render -> your service -> Environment -> **Secret Files** -> Add file named `cookies.txt` and paste the contents.
+3. Redeploy, then open `/api/music/debug/ytdlp`: expect `"ok":true` and `cookieInfo.loggedIn:true`.
+(`YT_COOKIES_FILE` can point to a different path.)
+
+## APK download shows 404
+The button points to the latest GitHub Release. Make sure the repo is public, `VITE_GITHUB_REPO` is exactly `owner/repo`, GitHub Actions variables `APP_URL` and `API_URL` are set, then run Actions -> "Build Android app" -> Run workflow (or push tag `v1.0.0`) and wait until the release has `HiMusic.apk`.
