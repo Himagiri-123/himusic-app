@@ -4,6 +4,7 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 export const isNative = Capacitor.isNativePlatform();
 const MC = isNative ? registerPlugin("MediaControls") : null;
 const AppPlugin = isNative ? registerPlugin("App") : null;
+export const Installer = isNative ? registerPlugin("ApkInstaller") : null;
 
 export const nativeMedia = {
   // show / update the notification + lock-screen controls (title, artist, artwork, play state, position)
@@ -21,6 +22,14 @@ export const nativeMedia = {
 };
 
 export const nativeStatus = () => (MC ? MC.status().catch((e) => ({ error: String(e?.message || e) })) : Promise.resolve(null));
+
+export async function installedBuild() {
+  try {
+    return Number((await AppPlugin.getInfo()).build) || 0;
+  } catch {
+    return 0;
+  }
+}
 
 export async function installedVersion() {
   try {

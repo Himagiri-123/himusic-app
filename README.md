@@ -152,3 +152,13 @@ Open the Vercel URL on your phone in Chrome -> menu -> "Install app" / "Add to H
 
 ## APK download shows 404
 The button points to the latest GitHub Release. Make sure the repo is public, `VITE_GITHUB_REPO` is exactly `owner/repo`, GitHub Actions variables `APP_URL` and `API_URL` are set, then run Actions -> "Build Android app" -> Run workflow (or push tag `v1.0.0`) and wait until the release has `HiMusic.apk`.
+
+## Smooth playback & less data (Smart cache)
+- The next song is downloaded once, in full, while the current one plays, and kept in a local cache (Settings -> Smart cache: 50/100/200/500 MB, oldest removed first). Replays start instantly and use no data, and the next song can not stall in the background.
+- `CHUNK_BYTES` (server) defaults to 8 MB = one whole song per request.
+- Render's free plan sleeps after 15 min: add a free UptimeRobot monitor that opens `https://<your-api>.onrender.com/` every 5 minutes so the first song never waits for a cold start.
+- Keep the equalizer OFF if music stops with the screen off (Web Audio is suspended by some phones).
+
+## Android app updates
+- The app checks GitHub Releases on open and when it comes back to the front. A red dot shows on your avatar; tap Update to download with a % progress bar and install. Settings -> "Check for app updates" does it manually.
+- Android asks once to "Allow from this source" (install unknown apps) for HiMusic.

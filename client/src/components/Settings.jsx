@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useApp } from "../store.jsx";
 import { usePlayer } from "../PlayerContext.jsx";
 import { useDownloads } from "../downloads.jsx";
@@ -7,6 +7,8 @@ import Icon from "./Icon.jsx";
 import { isNative } from "../native.js";
 import { apkUrl } from "./UpdatePrompt.jsx";
 import Diagnostics from "./Diagnostics.jsx";
+import { cacheClear, cacheUsage } from "../cache.js";
+import { checkApkUpdate, startApkUpdate, useApkUpdate } from "../apkUpdate.js";
 
 const Seg = ({ value, options, onChange }) => (
   <div className="seg">
@@ -40,6 +42,12 @@ export default function Settings() {
   const p = usePlayer();
   const dl = useDownloads();
   const [diag, setDiag] = useState(false);
+  const [usage, setUsage] = useState({ count: 0, bytes: 0 });
+  const [updMsg, setUpdMsg] = useState("");
+  const upd = useApkUpdate();
+  useEffect(() => {
+    if (s.open) cacheUsage().then(setUsage);
+  }, [s.open]);
   if (!s.open) return null;
   const close = () => s.setOpen(false);
   // Check the release first, so the user sees a clear message instead of GitHub's 404 page
@@ -86,6 +94,23 @@ export default function Settings() {
             <Switch on={s.offlineOnly} onChange={(v) => s.set({ offlineOnly: v })} label="Offline only" />
           </Row>
 
+          <Row
+            title="Smart cache"
+            hint={`Songs you play are kept on this phone, so replays start instantly and use no data. Using ${(usage.bytes / 1048576).toFixed(0)} MB (${usage.count} songs); the oldest are removed automatically.`}
+          >
+            <Switch on={s.cacheOn} onChange={(v) => s.set({ cacheOn: v })} label="Smart cache" />
+          </Row>
+          {s.cacheOn && (
+            <div className="eq-box">
+              <Row title="Cache limit">
+                <Seg value={s.cacheMB} onChange={(v) => s.set({ cacheMB: v })} options={[[50, "50 MB"], [100, "100 MB"], [200, "200 MB"], [500, "500 MB"]]} />
+              </Row>
+              <button className="sheet-item" onClick={async () => { await cacheClear(); setUsage({ count: 0, bytes: 0 }); }}>
+                <Icon name="close" size={24} /> <span>Clear cache</span>
+              </button>
+            </div>
+          )}
+
           <Row title="Autoplay similar songs" hint="When your playlist ends, keep playing songs with the same mood.">
             <Switch on={s.autoplay} onChange={(v) => s.set({ autoplay: v })} label="Autoplay" />
           </Row>
@@ -131,13 +156,36 @@ export default function Settings() {
           <button className="sheet-item" onClick={() => setDiag(true)}>
             <Icon name="star" size={24} /> <span>Playback self-test (troubleshoot)</span>
           </button>
+          {isNative && (
+            <button
+              className="sheet-item"
+              onClick={async () => {
+                setUpdMsg("Checking...");
+                const r = await checkApkUpdate({ force: true });
+                setUpdMsg(r === "latest" ? "You have the latest version." : r === "error" ? "Could not check for updates." : "");
+              }}
+            >
+              <Icon name="install" size={24} />
+              <span>{upd.available ? `Update available: ${upd.available.version}` : "Check for app updates"}</span>
+            </button>
+          )}
+          {upd.available && isNative && (
+            <button className="sheet-item" disabled={upd.phase === "downloading"} onClick={startApkUpdate}>
+              <Icon name="install" size={24} /> <span>{upd.phase === "downloading" ? `Downloading ${upd.percent}%` : "Download and install"}</span>
+            </button>
+          )}
+          {updMsg && <p className="sub small set-version">{updMsg}</p>}
           <p className="sub small set-version">HiMusic v{__APP_VERSION__}{isNative ? " (Android app)" : ""}</p>
           <button className="sheet-item danger" onClick={() => { close(); logout(); }}>
             <Icon name="logout" size={24} /> <span>Log out {user?.email ? `(${user.email})` : ""}</span>
           </button>
         </div>
       </div>
-      {diag && <Diagnostics onClose={() => setDiag(false)} />}
+      {diag && (
+        <div onClick={(e) => e.stopPropagation()}>
+          <Diagnostics onClose={() => setDiag(false)} />
+        </div>
+      )}
     </div>
   );
 }

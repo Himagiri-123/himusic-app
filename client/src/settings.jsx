@@ -16,6 +16,8 @@ const DEF = {
   eqPreset: "flat",
   bass: 0, // extra bass dB (0-12) on top of the preset
   offlineOnly: false,
+  cacheOn: true, // Smart cache: keep played songs on the phone so replays cost no data
+  cacheMB: 200,
   voiceLang: "te-IN",
 };
 

@@ -46,7 +46,8 @@ export const api = {
   artists: (q) => request(`/api/music/artists?q=${enc(q)}`),
   suggest: (q) => request(`/api/music/suggest?q=${enc(q)}`),
   home: (artist) => request(`/api/music/home${artist ? `?artist=${enc(artist)}` : ""}`),
-  stream: (id, q = "normal") => request(`/api/music/stream/${id}?q=${q}`),
+  stream: (id, q = "normal", song) =>
+    request(`/api/music/stream/${id}?q=${q}${song?.title ? `&t=${enc(song.title)}&a=${enc(song.artist || "")}` : ""}`),
   related: (song, exclude = []) =>
     request(`/api/music/related?title=${enc(song.title || "")}&artist=${enc(song.artist || "")}&exclude=${enc(exclude.slice(-40).join(","))}`),
   lyrics: (s) =>

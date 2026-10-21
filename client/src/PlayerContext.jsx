@@ -2,10 +2,11 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import { api } from "./api";
 import { useApp } from "./store.jsx";
 import { useDownloads } from "./downloads.jsx";
-import { useSettings, resolveQuality, EQ_PRESETS } from "./settings.jsx";
+import { useSettings, resolveQuality, connectionKind, EQ_PRESETS } from "./settings.jsx";
 import { SILENT_WAV } from "./silent.js";
 import { pushEntry, goBack } from "./historyStack.js";
 import { isNative, nativeMedia } from "./native.js";
+import { cacheGet, cachePut, fetchSong } from "./cache.js";
 
 const Ctx = createContext(null);
 export const usePlayer = () => useContext(Ctx);
@@ -80,6 +81,10 @@ export function PlayerProvider({ children }) {
   const shuffleRef = useRef(false);
   const repeatRef = useRef("off");
   const preloadRef = useRef(null);
+  const preloadWait = useRef(null); // promise of the next-song download in progress
+  const cacheUrls = useRef([]); // object URLs of cached songs (old ones are released)
+  const curSource = useRef("net"); // where the playing song comes from: net | cache | local
+  const cachingNow = useRef(null);
   const preloadingId = useRef(null);
   const preloadTried = useRef(false);
   const unlocked = useRef(false);
@@ -126,6 +131,12 @@ export function PlayerProvider({ children }) {
   const getIdle = () => elsRef.current[1 - activeRef.current];
   const isActive = (e) => e.currentTarget === getEl();
   const syncQueue = () => setQueue([...userQ.current, ...ctxQ.current]);
+  const blobUrl = (blob) => {
+    const u = URL.createObjectURL(blob);
+    cacheUrls.current.push(u);
+    while (cacheUrls.current.length > 6) URL.revokeObjectURL(cacheUrls.current.shift());
+    return u;
+  };
   const curTime = () =>
     engineRef.current === "embed" ? ytRef.current?.getCurrentTime?.() || 0 : getEl()?.currentTime || 0;
 
@@ -293,7 +304,32 @@ export function PlayerProvider({ children }) {
     try {
       const local = await getLocalRef.current?.(song.id);
       if (!local && stRef.current.offlineOnly) return;
-      const s = local ? { audioUrl: local, videoUrl: null, related: [] } : await api.stream(song.id, quality());
+      let s = local ? { audioUrl: local, videoUrl: null, related: [] } : null;
+      let source = local ? "local" : "net";
+      if (!s && stRef.current.cacheOn) {
+        const hit = await cacheGet(song.id);
+        if (hit) {
+          s = { audioUrl: blobUrl(hit), videoUrl: null, related: [] };
+          source = "cache";
+        }
+      }
+      if (!s) {
+        s = await api.stream(song.id, quality(), song);
+        if (stRef.current.cacheOn && modeRef.current !== "video") {
+          // one download of the whole song: it is kept for replays and plays from the phone, so it
+          // cannot stall in the background or with the screen off
+          const job = (async () => {
+            try {
+              const blob = await fetchSong(s.audioUrl);
+              cachePut(song.id, blob, stRef.current.cacheMB);
+              s = { ...s, audioUrl: blobUrl(blob), videoUrl: null };
+              source = "cache";
+            } catch {}
+          })();
+          preloadWait.current = { id: song.id, p: job };
+          await job;
+        }
+      }
       const still = peekNext();
       const idle = getIdle();
       if (!still || still.id !== song.id || !idle) return;
@@ -303,10 +339,11 @@ export function PlayerProvider({ children }) {
       idle.src = modeRef.current === "video" && s.videoUrl ? s.videoUrl : s.audioUrl;
       idle.preload = "auto";
       idle.load();
-      preloadRef.current = { id: song.id, stream: s };
+      preloadRef.current = { id: song.id, stream: s, source };
     } catch {
     } finally {
       preloadingId.current = null;
+      preloadWait.current = null;
     }
   };
 
@@ -342,6 +379,13 @@ export function PlayerProvider({ children }) {
       playedIds.current.add(song.id);
       preloadTried.current = false;
 
+      // the next song is still downloading in the background: wait a moment instead of fetching it twice
+      if (!opts._retry && preloadWait.current?.id === song.id && resumeAt === 0) {
+        await Promise.race([preloadWait.current.p, new Promise((r) => setTimeout(r, 4000))]);
+        if (token !== loadToken.current) return;
+        if (preloadRef.current?.id === song.id) return load(song, resumeAt, { ...opts, _retry: true });
+      }
+
       // gapless: the next song is already buffered in the spare element
       const pre = preloadRef.current;
       if (pre && pre.id === song.id && resumeAt === 0 && engineRef.current === "direct" && prefRef.current !== "embed") {
@@ -349,6 +393,7 @@ export function PlayerProvider({ children }) {
         const old = getEl();
         const idle = getIdle();
         streamRef.current = pre.stream;
+        curSource.current = pre.source || "net";
         relatedRef.current = pre.stream.related || [];
         setHasVideo(!!pre.stream.videoUrl);
         activeRef.current = 1 - activeRef.current;
@@ -394,6 +439,7 @@ export function PlayerProvider({ children }) {
         if (local) {
           const s = { audioUrl: local, videoUrl: null, related: [] };
           streamRef.current = s;
+          curSource.current = "local";
           relatedRef.current = [];
           setHasVideo(false);
           if (modeRef.current === "video") {
@@ -419,13 +465,38 @@ export function PlayerProvider({ children }) {
         return;
       }
 
+      // played before? the smart cache has it: instant start, no data
+      if (stRef.current.cacheOn && modeRef.current !== "video") {
+        try {
+          const hit = await cacheGet(song.id);
+          if (token !== loadToken.current) return;
+          if (hit) {
+            const s = { audioUrl: blobUrl(hit), videoUrl: null, related: [] };
+            streamRef.current = s;
+            curSource.current = "cache";
+            relatedRef.current = [];
+            setHasVideo(false);
+            try {
+              ytRef.current?.stopVideo?.();
+            } catch {}
+            engineRef.current = "direct";
+            setEngine("direct");
+            applySource(s, "audio", resumeAt);
+            addHistory(song);
+            setLoading(false);
+            return;
+          }
+        } catch {}
+      }
+
       const skipDirect = prefRef.current === "embed" || Date.now() - directFailedAt.current < 10 * 60 * 1000;
 
       if (!skipDirect) {
         try {
-          const s = await api.stream(song.id, quality());
+          const s = await api.stream(song.id, quality(), song);
           if (token !== loadToken.current) return;
           streamRef.current = s;
+          curSource.current = "net";
           relatedRef.current = s.related || [];
           setHasVideo(!!s.videoUrl);
           if (modeRef.current === "video" && !s.videoUrl) {
@@ -937,6 +1008,18 @@ export function PlayerProvider({ children }) {
       lastSave.current = now;
       saveRef.current();
     }
+    if (
+      stRef.current.cacheOn && curSource.current === "net" && listened.current >= 30 && cachingNow.current !== currentRef.current?.id &&
+      engineRef.current === "direct" && modeRef.current === "audio" && streamRef.current?.audioUrl &&
+      !["cellular", "saver"].includes(connectionKind())
+    ) {
+      const id = currentRef.current?.id;
+      const url = streamRef.current.audioUrl;
+      cachingNow.current = id;
+      fetchSong(url)
+        .then((blob) => cachePut(id, blob, stRef.current.cacheMB))
+        .catch(() => {});
+    }
     const xf = stRef.current.crossfade;
     if (
       xf && d && isFinite(d) && d > xf * 3 && d - el.currentTime <= xf + 0.3 && !xfading.current &&
@@ -951,7 +1034,7 @@ export function PlayerProvider({ children }) {
       isFinite(d) &&
       !preloadTried.current &&
       engineRef.current === "direct" &&
-      (el.currentTime / d > 0.6 || d - el.currentTime < 45)
+      (el.currentTime / d > 0.45 || d - el.currentTime < 75)
     ) {
       preloadTried.current = true;
       preloadNext();

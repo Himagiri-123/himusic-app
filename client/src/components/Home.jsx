@@ -1,3 +1,4 @@
+import { useApkUpdate } from "../apkUpdate.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { useApp } from "../store.jsx";
@@ -20,6 +21,7 @@ const readCache = () => {
 };
 
 export default function Home() {
+  const apkUpd = useApkUpdate();
   const { lib, libLoaded, user, logout } = useApp();
   const { play, current } = usePlayer();
   const settings = useSettings();
@@ -87,6 +89,7 @@ export default function Home() {
         <div className="head-actions">
           <button className="avatar" onClick={() => setMenuOpen((o) => !o)} aria-label="Account">
             {(user?.name || "U").trim()[0].toUpperCase()}
+            {apkUpd.available && <i className="upd-dot" />}
           </button>
           {menuOpen && (
             <div className="pop" onClick={() => setMenuOpen(false)}>

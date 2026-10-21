@@ -440,7 +440,8 @@ router.get("/stream/:id", async (req, res) => {
     // Tier 0: our own yt-dlp engine, streamed through /audio/:id (best for lock-screen playback)
     if (ytdlpEnabled() && !ytdlpDown()) {
       try {
-        await resolveAudio(id, q);
+        const hint = req.query.t ? { title: String(req.query.t).slice(0, 160), artist: String(req.query.a || "").slice(0, 100) } : null;
+        await resolveAudio(id, q, "audio", { hint });
         const a = signAudio(id, "audio", q);
         const v = signAudio(id, "video", "normal"); // video is only resolved if the user actually opens it
         data = {
@@ -477,9 +478,10 @@ router.get("/audio/:id", async (req, res) => {
   try {
     const info = await resolveAudio(id, q, kind);
     const headers = { "User-Agent": UA };
-    // Range requests are capped (~1 MB per request) so a skipped song never downloads the whole file.
+    // Range requests are capped per response. The default (8 MB) is a whole song, so the phone buffers it fully
+    // and keeps playing in the background / with the screen off even if the network is throttled.
     // Requests with no Range header (offline downloads) get the full file.
-    const CAP = Number(process.env.CHUNK_BYTES) || 1024 * 1024;
+    const CAP = Number(process.env.CHUNK_BYTES) || 8 * 1024 * 1024;
     const m = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range || "");
     if (m) {
       const start = Number(m[1]);
@@ -496,7 +498,7 @@ router.get("/audio/:id", async (req, res) => {
       const v = up.headers.get(h);
       if (v) res.set(h, v);
     }
-    res.set("Cache-Control", "private, max-age=3600");
+    res.set("Cache-Control", "private, max-age=21600");
     const body = Readable.fromWeb(up.body);
     req.on("close", () => body.destroy());
     body.on("error", () => res.end());

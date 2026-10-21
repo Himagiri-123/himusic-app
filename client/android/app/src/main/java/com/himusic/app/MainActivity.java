@@ -10,6 +10,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(MediaControlsPlugin.class);
+        registerPlugin(ApkInstallerPlugin.class);
         super.onCreate(savedInstanceState);
         WebView wv = getBridge().getWebView();
         if (wv != null) {
