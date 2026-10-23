@@ -5,7 +5,13 @@ import { useDownloads } from "./downloads.jsx";
 import { useSettings, resolveQuality, connectionKind, EQ_PRESETS } from "./settings.jsx";
 import { SILENT_WAV } from "./silent.js";
 import { pushEntry, goBack } from "./historyStack.js";
-import { isNative, nativeMedia } from "./native.js";
+import { isNative, nativeMedia, nativePlayer } from "./native.js";
+
+// Android app: the native engine (ExoPlayer in a foreground service) plays the music so it never depends
+// on the WebView. NATIVE_OK is false on the website and in old APKs, which keep using the web player.
+let NATIVE_OK = false;
+const nativeProbe = nativePlayer ? nativePlayer.available().then((v) => (NATIVE_OK = v)) : Promise.resolve(false);
+const withNocap = (u) => (/[?&]nocap=1/.test(u) ? u : u + (u.includes("?") ? "&" : "?") + "nocap=1");
 import { cacheGet, cachePut, fetchSong } from "./cache.js";
 
 const Ctx = createContext(null);
@@ -85,6 +91,14 @@ export function PlayerProvider({ children }) {
   const cacheUrls = useRef([]); // object URLs of cached songs (old ones are released)
   const curSource = useRef("net"); // where the playing song comes from: net | cache | local
   const cachingNow = useRef(null);
+  const nativeActive = useRef(false); // the current song is playing in the native engine
+  const nativeId = useRef(null); // id of the track the native engine is on
+  const nativePos = useRef(0);
+  const nativeFailedAt = useRef(0);
+  const syncSeq = useRef(0);
+  const syncTimer = useRef(null);
+  const syncNativeRef = useRef(null);
+  const nativeEvRef = useRef({});
   const preloadingId = useRef(null);
   const preloadTried = useRef(false);
   const unlocked = useRef(false);
@@ -130,7 +144,18 @@ export function PlayerProvider({ children }) {
   const getEl = () => elsRef.current[activeRef.current];
   const getIdle = () => elsRef.current[1 - activeRef.current];
   const isActive = (e) => e.currentTarget === getEl();
-  const syncQueue = () => setQueue([...userQ.current, ...ctxQ.current]);
+  const syncSoon = () => {
+    if (!nativeActive.current) return;
+    clearTimeout(syncTimer.current);
+    syncTimer.current = setTimeout(() => syncNativeRef.current?.(), 250);
+  };
+  const syncQueue = () => {
+    setQueue([...userQ.current, ...ctxQ.current]);
+    syncSoon();
+  };
+  const webCache = () => stRef.current.cacheOn && !NATIVE_OK; // in the app the native cache is used instead
+  const canNative = () =>
+    NATIVE_OK && modeRef.current === "audio" && prefRef.current !== "embed" && Date.now() - nativeFailedAt.current > 3 * 60 * 1000;
   const blobUrl = (blob) => {
     const u = URL.createObjectURL(blob);
     cacheUrls.current.push(u);
@@ -138,7 +163,9 @@ export function PlayerProvider({ children }) {
     return u;
   };
   const curTime = () =>
-    engineRef.current === "embed" ? ytRef.current?.getCurrentTime?.() || 0 : getEl()?.currentTime || 0;
+    nativeActive.current
+      ? nativePos.current
+      : engineRef.current === "embed" ? ytRef.current?.getCurrentTime?.() || 0 : getEl()?.currentTime || 0;
 
   /* ---------- direct engine ---------- */
   const applySource = useCallback((s, m, resumeAt = 0) => {
@@ -293,7 +320,7 @@ export function PlayerProvider({ children }) {
   };
 
   const preloadNext = async () => {
-    if (engineRef.current !== "direct") return;
+    if (engineRef.current !== "direct" || nativeActive.current) return;
     let song = peekNext();
     if (!song && stRef.current.autoplay && !stRef.current.offlineOnly) {
       await fillRadio();
@@ -306,7 +333,7 @@ export function PlayerProvider({ children }) {
       if (!local && stRef.current.offlineOnly) return;
       let s = local ? { audioUrl: local, videoUrl: null, related: [] } : null;
       let source = local ? "local" : "net";
-      if (!s && stRef.current.cacheOn) {
+      if (!s && webCache()) {
         const hit = await cacheGet(song.id);
         if (hit) {
           s = { audioUrl: blobUrl(hit), videoUrl: null, related: [] };
@@ -315,7 +342,7 @@ export function PlayerProvider({ children }) {
       }
       if (!s) {
         s = await api.stream(song.id, quality(), song);
-        if (stRef.current.cacheOn && modeRef.current !== "video") {
+        if (webCache() && modeRef.current !== "video") {
           // one download of the whole song: it is kept for replays and plays from the phone, so it
           // cannot stall in the background or with the screen off
           const job = (async () => {
@@ -359,6 +386,220 @@ export function PlayerProvider({ children }) {
     } catch {}
   };
 
+  /* ---------- native engine (Android app) ---------- */
+  const leaveWeb = () => {
+    if (pendingRef.current) pendingRef.current.el.removeEventListener("loadedmetadata", pendingRef.current.fn);
+    pendingRef.current = null;
+    preloadRef.current = null;
+    clearInterval(fadeTimer.current);
+    for (const el of elsRef.current) {
+      if (!el || !el.getAttribute("src")) continue;
+      try {
+        el.pause();
+        el.removeAttribute("src");
+        el.load();
+      } catch {}
+    }
+  };
+  const leaveNative = () => {
+    if (!nativeActive.current) return;
+    nativeActive.current = false;
+    nativeId.current = null;
+    clearTimeout(syncTimer.current);
+    nativePlayer?.stop();
+  };
+  const mkTrack = (song, s) => ({
+    id: song.id,
+    title: song.title || "",
+    artist: song.artist || "",
+    artwork: song.id ? `https://i.ytimg.com/vi/${song.id}/hqdefault.jpg` : song.thumbnail || "",
+    url: withNocap(s.audioUrl),
+    duration: song.duration || 0,
+  });
+  const startNative = async (song, s, resumeAt) => {
+    leaveWeb();
+    try {
+      ytRef.current?.stopVideo?.();
+    } catch {}
+    nativeActive.current = true;
+    nativeId.current = song.id;
+    nativePos.current = resumeAt || 0;
+    await nativePlayer.repeatOne(repeatRef.current === "one");
+    await nativePlayer.play([mkTrack(song, s)], Math.round((resumeAt || 0) * 1000));
+    engineRef.current = "direct";
+    setEngine("direct");
+    setPlaying(true);
+    setLoading(false);
+    syncSoon();
+  };
+  // next songs for the native queue, so it moves on by itself even with the screen off
+  const peekList = (n) => {
+    const cur = currentRef.current;
+    if (!cur || repeatRef.current === "one" || sleepRef.current?.mode === "song") return [];
+    const out = [];
+    const seen = new Set([cur.id]);
+    const add = (x) => {
+      if (x && x.id && !seen.has(x.id) && out.length < n) {
+        seen.add(x.id);
+        out.push(x);
+      }
+    };
+    userQ.current.forEach(add);
+    ctxQ.current.forEach(add);
+    if (!out.length && repeatRef.current === "all") contextRef.current.forEach(add);
+    if (!out.length && stRef.current.autoplay && !stRef.current.offlineOnly)
+      relatedRef.current.filter((r) => !playedIds.current.has(r.id)).forEach(add);
+    return out;
+  };
+  const syncNative = async () => {
+    const cur = currentRef.current;
+    if (!nativeActive.current || !cur || nativeId.current !== cur.id) return;
+    const seq = ++syncSeq.current;
+    let cands = peekList(2);
+    if (!cands.length && repeatRef.current !== "one" && sleepRef.current?.mode !== "song" && stRef.current.autoplay && !stRef.current.offlineOnly) {
+      await fillRadio();
+      if (seq !== syncSeq.current) return;
+      cands = peekList(2);
+    }
+    const tracks = [];
+    if (!stRef.current.offlineOnly) {
+      const res = await Promise.all(
+        cands.map(async (song) => {
+          try {
+            if (await getLocalRef.current?.(song.id)) return null; // saved songs play through the web player
+            return mkTrack(song, await api.stream(song.id, quality(), song));
+          } catch {
+            return null;
+          }
+        })
+      );
+      for (const t of res) {
+        if (!t) break;
+        tracks.push(t);
+      }
+    }
+    if (seq !== syncSeq.current || !nativeActive.current || nativeId.current !== cur.id || currentRef.current?.id !== cur.id) return;
+    nativePlayer.upcoming(cur.id, tracks);
+  };
+  syncNativeRef.current = syncNative;
+  const takeById = (id) => {
+    let i = userQ.current.findIndex((x) => x.id === id);
+    if (i >= 0) return userQ.current.splice(i, 1)[0];
+    i = ctxQ.current.findIndex((x) => x.id === id);
+    if (i >= 0) {
+      const song = ctxQ.current[i];
+      ctxQ.current = ctxQ.current.slice(i + 1);
+      return song;
+    }
+    const rel = relatedRef.current.find((x) => x.id === id);
+    if (rel) return rel;
+    const j = contextRef.current.findIndex((x) => x.id === id);
+    if (j >= 0) {
+      ctxQ.current = contextRef.current.slice(j + 1);
+      return contextRef.current[j];
+    }
+    return null;
+  };
+  // the native engine moved on to the next song by itself
+  const onNativeAdvance = (id) => {
+    const cur = currentRef.current;
+    if (!id || cur?.id === id) return;
+    const song = takeById(id);
+    if (!song) return;
+    if (listened.current >= 30 && cur) {
+      api.playStat({ id: cur.id, title: cur.title, artist: cur.artist, thumbnail: cur.thumbnail }, Math.round(listened.current)).catch(() => {});
+    }
+    listened.current = 0;
+    if (cur) prevRef.current.push(cur);
+    nativeId.current = id;
+    nativePos.current = 0;
+    playedIds.current.add(id);
+    radioFor.current = null;
+    currentRef.current = song;
+    setCurrent(song);
+    setTime({ cur: 0, dur: song.duration || 0 });
+    setError("");
+    errCount.current = 0;
+    addHistory(song);
+    syncQueue();
+  };
+  nativeEvRef.current = {
+    state: (d) => {
+      if (!nativeActive.current || (d.id && d.id !== currentRef.current?.id)) return;
+      setPlaying(!!d.playing || (!!d.wantsPlay && !!d.buffering));
+      setLoading(!!d.buffering && !!d.wantsPlay);
+      if (d.duration) setTime((t) => ({ ...t, dur: d.duration }));
+      if (d.playing) setError("");
+    },
+    time: (d) => {
+      if (!nativeActive.current || (d.id && d.id !== currentRef.current?.id)) return;
+      nativePos.current = d.position || 0;
+      setTime({ cur: d.position || 0, dur: d.duration || currentRef.current?.duration || 0 });
+      const now = Date.now();
+      const dt = (now - lastTick.current) / 1000;
+      lastTick.current = now;
+      if (d.playing && dt > 0 && dt < 2.5) listened.current += dt;
+      if (now - lastSave.current > 3000) {
+        lastSave.current = now;
+        saveRef.current?.();
+      }
+    },
+    advanced: (d) => nativeActive.current && onNativeAdvance(d.id),
+    ended: () => {
+      if (!nativeActive.current) return;
+      if (sleepRef.current?.mode === "song") {
+        setSleep(null);
+        setPlaying(false);
+        return;
+      }
+      nativeActive.current = false;
+      nativeId.current = null;
+      nextRef.current?.();
+    },
+    error: (d) => {
+      if (!nativeActive.current || (d.id && d.id !== currentRef.current?.id)) return;
+      // the native engine could not play this song: continue with the web player
+      nativeFailedAt.current = Date.now();
+      leaveNative();
+      if (currentRef.current) loadRef.current?.(currentRef.current, nativePos.current);
+    },
+  };
+  useEffect(() => {
+    if (!nativePlayer) return;
+    let off = () => {};
+    let dead = false;
+    nativeProbe.then((ok) => {
+      if (!ok || dead) return;
+      off = nativePlayer.on({
+        state: (d) => nativeEvRef.current.state(d),
+        time: (d) => nativeEvRef.current.time(d),
+        advanced: (d) => nativeEvRef.current.advanced(d),
+        ended: (d) => nativeEvRef.current.ended(d),
+        error: (d) => nativeEvRef.current.error(d),
+      });
+      nativePlayer.stop(); // a fresh page must not inherit a song from an old session
+    });
+    // while the screen was off the page may have missed events: catch up when it comes back
+    const vis = async () => {
+      if (document.visibilityState !== "visible" || !nativeActive.current) return;
+      const d = await nativePlayer.state();
+      if (!d || !d.id) return;
+      if (d.id !== currentRef.current?.id) onNativeAdvance(d.id);
+      nativeEvRef.current.state({ ...d, wantsPlay: d.playing });
+    };
+    document.addEventListener("visibilitychange", vis);
+    return () => {
+      dead = true;
+      off();
+      document.removeEventListener("visibilitychange", vis);
+    };
+  }, []); // eslint-disable-line
+  // cache size chosen in Settings
+  useEffect(() => {
+    if (!nativePlayer) return;
+    nativeProbe.then((ok) => ok && nativePlayer.cacheLimit(st.cacheOn ? st.cacheMB : 0));
+  }, [st.cacheOn, st.cacheMB]);
+
   /* ---------- load a song with the best engine ---------- */
   const load = useCallback(
     async (song, resumeAt = 0, opts = {}) => {
@@ -371,6 +612,8 @@ export function PlayerProvider({ children }) {
       xfading.current = false;
       radioFor.current = null;
       const token = ++loadToken.current;
+      if (nativePlayer) await nativeProbe;
+      if (token !== loadToken.current) return;
       setCurrent(song);
       currentRef.current = song;
       setLoading(true);
@@ -449,6 +692,7 @@ export function PlayerProvider({ children }) {
           try {
             ytRef.current?.stopVideo?.();
           } catch {}
+          leaveNative();
           engineRef.current = "direct";
           setEngine("direct");
           applySource(s, "audio", resumeAt);
@@ -466,7 +710,7 @@ export function PlayerProvider({ children }) {
       }
 
       // played before? the smart cache has it: instant start, no data
-      if (stRef.current.cacheOn && modeRef.current !== "video") {
+      if (webCache() && modeRef.current !== "video") {
         try {
           const hit = await cacheGet(song.id);
           if (token !== loadToken.current) return;
@@ -503,6 +747,20 @@ export function PlayerProvider({ children }) {
             modeRef.current = "audio";
             setModeState("audio");
           }
+          if (canNative()) {
+            try {
+              await startNative(song, s, resumeAt);
+              if (token !== loadToken.current) return;
+              curSource.current = "native";
+              addHistory(song);
+              return;
+            } catch {
+              nativeFailedAt.current = Date.now();
+              leaveNative();
+              if (token !== loadToken.current) return;
+            }
+          }
+          leaveNative();
           try {
             ytRef.current?.stopVideo?.();
           } catch {}
@@ -518,6 +776,7 @@ export function PlayerProvider({ children }) {
         }
       }
 
+      leaveNative();
       streamRef.current = null;
       relatedRef.current = [];
       setHasVideo(true);
@@ -577,7 +836,11 @@ export function PlayerProvider({ children }) {
   loadRef.current = load;
 
   const seek = useCallback((t) => {
-    if (engineRef.current === "embed") {
+    if (nativeActive.current) {
+      nativePos.current = t;
+      nativePlayer.seek(Math.round(t * 1000));
+      setTime((x) => ({ ...x, cur: t }));
+    } else if (engineRef.current === "embed") {
       ytRef.current?.seekTo?.(t, true);
       setTime((x) => ({ ...x, cur: t }));
     } else {
@@ -663,6 +926,10 @@ export function PlayerProvider({ children }) {
       loadRef.current?.(currentRef.current, at);
       return;
     }
+    if (nativeActive.current) {
+      playingRef.current ? nativePlayer.pause() : nativePlayer.resume();
+      return;
+    }
     if (engineRef.current === "embed") {
       const p = ytRef.current;
       if (!p?.getPlayerState) return;
@@ -695,7 +962,11 @@ export function PlayerProvider({ children }) {
     repeatRef.current = n;
     setRepeat(n);
     preloadTried.current = false;
-  }, []);
+    if (nativeActive.current) {
+      nativePlayer.repeatOne(n === "one");
+      syncSoon();
+    }
+  }, []); // eslint-disable-line
 
   const addToQueue = useCallback(
     (song) => {
@@ -762,10 +1033,12 @@ export function PlayerProvider({ children }) {
       setError("Video not available for this song");
       return;
     }
+    const pos = nativeActive.current ? nativePos.current : el.currentTime;
+    leaveNative(); // video needs the web player
     modeRef.current = target;
     setModeState(target);
     preloadRef.current = null;
-    applySource(s, target, el.currentTime);
+    applySource(s, target, pos);
   }, [applySource]); // eslint-disable-line
 
   const setPref = useCallback(
@@ -785,20 +1058,36 @@ export function PlayerProvider({ children }) {
     if (!opt) {
       sleepRef.current = null;
       setSleepState(null);
+      syncSoon();
       return;
     }
     if (opt === "song") {
       sleepRef.current = { mode: "song" };
       setSleepState(sleepRef.current);
+      syncSoon();
       return;
     }
     const ms = opt * 60 * 1000;
     sleepRef.current = { mode: "time", endAt: Date.now() + ms };
     setSleepState(sleepRef.current);
+    syncSoon();
     sleepTimer.current = setTimeout(() => {
       // fade out over 4 s, then pause
       sleepRef.current = null;
       setSleepState(null);
+      if (nativeActive.current) {
+        const t1 = Date.now();
+        const iv2 = setInterval(() => {
+          const k = Math.min(1, (Date.now() - t1) / 4000);
+          nativePlayer.volume(1 - k);
+          if (k >= 1) {
+            clearInterval(iv2);
+            nativePlayer.pause();
+            nativePlayer.volume(1);
+          }
+        }, 200);
+        return;
+      }
       const el = getEl();
       if (engineRef.current === "embed" || !el) {
         ytRef.current?.pauseVideo?.();
@@ -959,6 +1248,7 @@ export function PlayerProvider({ children }) {
   const durRounded = Math.round(time.dur || 0);
   useEffect(() => {
     if (!isNative) return;
+    if (nativeActive.current) return; // the native engine drives its own notification
     if (!current) return nativeMedia.stop();
     nativeMedia.update({
       title: current.title || "",
@@ -1009,7 +1299,7 @@ export function PlayerProvider({ children }) {
       saveRef.current();
     }
     if (
-      stRef.current.cacheOn && curSource.current === "net" && listened.current >= 30 && cachingNow.current !== currentRef.current?.id &&
+      webCache() && curSource.current === "net" && listened.current >= 30 && cachingNow.current !== currentRef.current?.id &&
       engineRef.current === "direct" && modeRef.current === "audio" && streamRef.current?.audioUrl &&
       !["cellular", "saver"].includes(connectionKind())
     ) {

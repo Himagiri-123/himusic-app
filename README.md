@@ -162,3 +162,13 @@ The button points to the latest GitHub Release. Make sure the repo is public, `V
 ## Android app updates
 - The app checks GitHub Releases on open and when it comes back to the front. A red dot shows on your avatar; tap Update to download with a % progress bar and install. Settings -> "Check for app updates" does it manually.
 - Android asks once to "Allow from this source" (install unknown apps) for HiMusic.
+
+## Native player (Android app)
+
+The APK plays music with its own engine (Media3 ExoPlayer in a foreground service), not in the WebView, so
+playback continues with the screen off, in the background and on the lock screen. React only sends commands
+(play / pause / seek / queue) through `MediaControlsPlugin` and listens to `p_state / p_time / p_advanced / p_ended / p_error`.
+The next 2 songs are queued natively, so tracks change by themselves. Played songs are kept in a rotating
+on-phone cache (Settings -> Smart cache: 50 / 100 / 200 MB, default 100 MB, Clear cache). Offline-downloaded songs,
+video mode and the website still use the normal web player (also used automatically if the native engine errors).
+After pushing, run GitHub Actions "Run workflow", install the new APK manually once, and clear the app data once.

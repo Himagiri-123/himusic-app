@@ -63,6 +63,8 @@ public class MediaService extends Service {
     }
 
     private void emit(String action, long pos) {
+        // the native music engine handles play/pause/next/previous itself (also when the web page is asleep)
+        if (NativePlayer.handleAction(action, pos)) return;
         Listener l = listener;
         if (l != null) l.onAction(action, pos);
     }
@@ -232,6 +234,7 @@ public class MediaService extends Service {
     @Override
     public void onTaskRemoved(Intent rootIntent) {
         // app swiped from Recents: stop the music and the notification
+        if (NativePlayer.active) NativePlayer.run(NativePlayer::stop);
         emit("pause", -1);
         shutdown();
         super.onTaskRemoved(rootIntent);

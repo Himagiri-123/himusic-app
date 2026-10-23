@@ -148,7 +148,8 @@ async function searchSaavnWrapper(baseUrl, query, q) {
   const picked = dls.find((d) => d.quality === targetQ) || dls.find((d) => d.quality === "160kbps") || dls[dls.length - 1];
   const streamUrl = picked?.url || picked?.link;
   if (!streamUrl) throw new Error("empty stream url");
-  return { url: streamUrl, mime: "audio/mp4", abr: q === "low" ? 96 : q === "high" ? 320 : 160, size: 0, headers: { "User-Agent": UA }, source: "saavn-cdn" };
+  const alts = dls.map((d) => d.url || d.link).filter((u) => u && u !== streamUrl);
+  return { url: streamUrl, alts, mime: "audio/mp4", abr: q === "low" ? 96 : q === "high" ? 320 : 160, size: 0, headers: { "User-Agent": UA }, source: "saavn-cdn" };
 }
 
 async function searchSaavnDirect(query, q) {
@@ -159,9 +160,11 @@ async function searchSaavnDirect(query, q) {
   for (const item of j?.results || []) {
     const preview = item?.media_preview_url || item?.more_info?.vlink;
     if (preview && preview.includes("saavncdn.com")) {
-      const suffix = q === "low" ? "_96.mp4" : "_160.mp4";
-      const fullUrl = preview.replace("preview.saavncdn.com", "aac.saavncdn.com").replace(/_96_p\.mp4$/, suffix);
-      return { url: fullUrl, mime: "audio/mp4", abr: q === "low" ? 96 : 160, size: 0, headers: { "User-Agent": UA }, source: "jiosaavn-direct" };
+      const base = preview.replace("preview.saavncdn.com", "aac.saavncdn.com");
+      const at = (kbps) => base.replace(/_96_p\.mp4$/, `_${kbps}.mp4`);
+      const order = q === "low" ? [96, 160, 320, 128] : q === "high" ? [320, 160, 96, 128] : [160, 96, 320, 128];
+      const urls = [...new Set(order.map(at))];
+      return { url: urls[0], alts: urls.slice(1), mime: "audio/mp4", abr: order[0], size: 0, headers: { "User-Agent": UA }, source: "jiosaavn-direct" };
     }
   }
   throw new Error("no direct saavn stream");
@@ -172,11 +175,31 @@ async function resolveFastAudio(id, q, hint) {
   const queries = buildSearchQueries(meta);
   if (!queries.length) throw new Error("could not read the song title");
   for (const query of queries) {
+    const tasks = [searchSaavnDirect(query, q), ...SAAVN_WRAPPERS.map((w) => searchSaavnWrapper(w, query, q))];
     try {
-      return await Promise.any([searchSaavnDirect(query, q), ...SAAVN_WRAPPERS.map((w) => searchSaavnWrapper(w, query, q))]);
+      const first = await Promise.any(tasks);
+      if (await pickWorking(first)) return first;
+      // the fastest answer pointed to a missing file: check the other sources too
+      for (const t of await Promise.allSettled(tasks)) if (t.status === "fulfilled" && t.value !== first && (await pickWorking(t.value))) return t.value;
     } catch {}
   }
   throw new Error("no matching stream found");
+}
+
+// A guessed CDN address can be a 404 (e.g. no 160 kbps file for that song). Ask for 2 bytes of each candidate and
+// keep the first that answers, so the player never receives a dead link.
+async function pickWorking(res) {
+  for (const u of [res.url, ...(res.alts || [])]) {
+    try {
+      const r = await fetch(u, { headers: { "User-Agent": UA, Range: "bytes=0-1" }, signal: AbortSignal.timeout(5000) });
+      r.body?.cancel?.().catch(() => {});
+      if (r.ok || r.status === 206) {
+        res.url = u;
+        return true;
+      }
+    } catch {}
+  }
+  return false;
 }
 
 async function run(id, q, kind, opts) {

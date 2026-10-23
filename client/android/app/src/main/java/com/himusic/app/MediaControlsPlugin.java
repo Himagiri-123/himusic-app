@@ -33,6 +33,7 @@ public class MediaControlsPlugin extends Plugin {
                         != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(getActivity(), new String[] {Manifest.permission.POST_NOTIFICATIONS}, 4242);
         }
+        NativePlayer.emitter = (event, data) -> notifyListeners("p_" + event, data);
         MediaService.listener = (action, positionMs) -> {
             JSObject o = new JSObject();
             o.put("action", action);
@@ -73,6 +74,126 @@ public class MediaControlsPlugin extends Plugin {
         o.put("batteryUnrestricted", pm != null && pm.isIgnoringBatteryOptimizations(getContext().getPackageName()));
         o.put("serviceRunning", MediaService.running);
         call.resolve(o);
+    }
+
+    /* ---------- native music engine (see NativePlayer) ---------- */
+
+    @PluginMethod
+    public void playerPing(PluginCall call) {
+        JSObject o = new JSObject();
+        o.put("ok", true);
+        o.put("version", 1);
+        call.resolve(o);
+    }
+
+    @PluginMethod
+    public void playerPlay(final PluginCall call) {
+        final com.getcapacitor.JSArray list = call.getArray("tracks");
+        final long start = call.getLong("startMs", 0L);
+        if (list == null || list.length() == 0) {
+            call.reject("no tracks");
+            return;
+        }
+        NativePlayer.run(() -> {
+            try {
+                NativePlayer.play(getContext(), list, start);
+                call.resolve();
+            } catch (Exception e) {
+                call.reject(String.valueOf(e.getMessage()));
+            }
+        });
+    }
+
+    @PluginMethod
+    public void playerUpcoming(final PluginCall call) {
+        final com.getcapacitor.JSArray list = call.getArray("tracks");
+        final String after = call.getString("afterId", "");
+        NativePlayer.run(() -> {
+            try {
+                NativePlayer.upcoming(list == null ? new com.getcapacitor.JSArray() : list, after);
+                call.resolve();
+            } catch (Exception e) {
+                call.reject(String.valueOf(e.getMessage()));
+            }
+        });
+    }
+
+    @PluginMethod
+    public void playerPause(final PluginCall call) {
+        NativePlayer.run(() -> {
+            NativePlayer.pause();
+            call.resolve();
+        });
+    }
+
+    @PluginMethod
+    public void playerResume(final PluginCall call) {
+        NativePlayer.run(() -> {
+            NativePlayer.resume();
+            call.resolve();
+        });
+    }
+
+    @PluginMethod
+    public void playerSeek(final PluginCall call) {
+        final long ms = call.getLong("ms", 0L);
+        NativePlayer.run(() -> {
+            NativePlayer.seek(ms);
+            call.resolve();
+        });
+    }
+
+    @PluginMethod
+    public void playerVolume(final PluginCall call) {
+        final float v = call.getFloat("v", 1f);
+        NativePlayer.run(() -> {
+            NativePlayer.volume(v);
+            call.resolve();
+        });
+    }
+
+    @PluginMethod
+    public void playerRepeatOne(final PluginCall call) {
+        final boolean on = Boolean.TRUE.equals(call.getBoolean("on", false));
+        NativePlayer.run(() -> {
+            NativePlayer.repeatOne(on);
+            call.resolve();
+        });
+    }
+
+    @PluginMethod
+    public void playerStop(final PluginCall call) {
+        NativePlayer.run(() -> {
+            NativePlayer.stop();
+            call.resolve();
+        });
+    }
+
+    @PluginMethod
+    public void playerState(final PluginCall call) {
+        NativePlayer.run(() -> call.resolve(NativePlayer.snapshot()));
+    }
+
+    @PluginMethod
+    public void cacheInfo(final PluginCall call) {
+        NativePlayer.run(() -> call.resolve(NativePlayer.cacheInfo(getContext())));
+    }
+
+    @PluginMethod
+    public void cacheLimit(final PluginCall call) {
+        final int mb = call.getInt("mb", 100);
+        NativePlayer.run(() -> {
+            NativePlayer.setLimitMB(getContext(), mb);
+            call.resolve();
+        });
+    }
+
+    @PluginMethod
+    public void cacheClear(final PluginCall call) {
+        NativePlayer.run(() -> {
+            NativePlayer.clearCache(getContext());
+            call.resolve();
+        });
     }
 
     @PluginMethod

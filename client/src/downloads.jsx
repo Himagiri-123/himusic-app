@@ -78,7 +78,7 @@ export function DownloadsProvider({ children }) {
         showToast("Downloaded for offline");
       } catch (e) {
         const why = e?.name === "QuotaExceededError" ? "not enough storage on this device"
-          : e?.message === "Failed to fetch" ? "blocked by the network or server settings (CORS)" : e?.message || "unknown error";
+          : e?.message === "Failed to fetch" ? "network or server problem (server may be waking up) - try again in a moment" : e?.message || "unknown error";
         showToast(`Download failed: ${why}`);
       } finally {
         busy.current.delete(song.id);

@@ -483,15 +483,21 @@ router.get("/audio/:id", async (req, res) => {
     // Requests with no Range header (offline downloads) get the full file.
     const CAP = Number(process.env.CHUNK_BYTES) || 8 * 1024 * 1024;
     const m = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range || "");
-    if (m) {
+    // the Android player (nocap=1) streams the whole file itself, so it gets uncapped ranges
+    if (m && req.query.nocap !== "1") {
       const start = Number(m[1]);
       const end = m[2] ? Math.min(Number(m[2]), start + CAP - 1) : start + CAP - 1;
       headers.Range = `bytes=${start}-${end}`;
     } else if (req.headers.range) headers.Range = req.headers.range;
-    const up = await fetch(info.url, { headers });
+    let up = await fetch(info.url, { headers });
     if (!up.ok && up.status !== 206) {
+      // link went bad (expired / moved): look the song up again once and retry
       dropAudio(id, q, kind);
-      return res.status(502).end();
+      try {
+        const fresh = await resolveAudio(id, q, kind);
+        up = await fetch(fresh.url, { headers });
+      } catch {}
+      if (!up.ok && up.status !== 206) return res.status(502).end();
     }
     res.status(up.status);
     for (const h of ["content-type", "content-length", "content-range", "accept-ranges"]) {

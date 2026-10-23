@@ -4,7 +4,7 @@ import { usePlayer } from "../PlayerContext.jsx";
 import { useDownloads } from "../downloads.jsx";
 import { EQ_PRESETS, connectionKind, resolveQuality, useSettings } from "../settings.jsx";
 import Icon from "./Icon.jsx";
-import { isNative } from "../native.js";
+import { isNative, nativePlayer } from "../native.js";
 import { apkUrl } from "./UpdatePrompt.jsx";
 import Diagnostics from "./Diagnostics.jsx";
 import { cacheClear, cacheUsage } from "../cache.js";
@@ -45,9 +45,21 @@ export default function Settings() {
   const [usage, setUsage] = useState({ count: 0, bytes: 0 });
   const [updMsg, setUpdMsg] = useState("");
   const upd = useApkUpdate();
+  const [nat, setNat] = useState(false); // true when the app's native cache is available
+  const loadUsage = async () => {
+    const n = nativePlayer ? await nativePlayer.cacheInfo() : null;
+    if (n && typeof n.bytes === "number") {
+      setNat(true);
+      setUsage({ count: n.count || 0, bytes: n.bytes });
+    } else {
+      setNat(false);
+      setUsage(await cacheUsage());
+    }
+  };
   useEffect(() => {
-    if (s.open) cacheUsage().then(setUsage);
-  }, [s.open]);
+    if (s.open) loadUsage();
+  }, [s.open]); // eslint-disable-line
+  const limits = nat ? [[50, "50 MB"], [100, "100 MB"], [200, "200 MB"]] : [[50, "50 MB"], [100, "100 MB"], [200, "200 MB"], [500, "500 MB"]];
   if (!s.open) return null;
   const close = () => s.setOpen(false);
   // Check the release first, so the user sees a clear message instead of GitHub's 404 page
@@ -103,9 +115,9 @@ export default function Settings() {
           {s.cacheOn && (
             <div className="eq-box">
               <Row title="Cache limit">
-                <Seg value={s.cacheMB} onChange={(v) => s.set({ cacheMB: v })} options={[[50, "50 MB"], [100, "100 MB"], [200, "200 MB"], [500, "500 MB"]]} />
+                <Seg value={s.cacheMB} onChange={(v) => s.set({ cacheMB: v })} options={limits} />
               </Row>
-              <button className="sheet-item" onClick={async () => { await cacheClear(); setUsage({ count: 0, bytes: 0 }); }}>
+              <button className="sheet-item" onClick={async () => { await (nat ? nativePlayer.cacheClear() : cacheClear()); await loadUsage(); }}>
                 <Icon name="close" size={24} /> <span>Clear cache</span>
               </button>
             </div>

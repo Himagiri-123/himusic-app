@@ -23,6 +23,33 @@ export const nativeMedia = {
 
 export const nativeStatus = () => (MC ? MC.status().catch((e) => ({ error: String(e?.message || e) })) : Promise.resolve(null));
 
+// The Android app plays music with its own native engine (ExoPlayer), outside the WebView.
+// On the website, or in an older APK without the engine, available() is false and the normal player is used.
+const EVENTS = ["state", "time", "advanced", "ended", "error"];
+export const nativePlayer = isNative
+  ? {
+      available: () => MC.playerPing().then((r) => !!r?.ok).catch(() => false),
+      play: (tracks, startMs = 0) => MC.playerPlay({ tracks, startMs }),
+      upcoming: (afterId, tracks) => MC.playerUpcoming({ afterId, tracks }).catch(() => {}),
+      pause: () => MC.playerPause().catch(() => {}),
+      resume: () => MC.playerResume().catch(() => {}),
+      seek: (ms) => MC.playerSeek({ ms }).catch(() => {}),
+      volume: (v) => MC.playerVolume({ v }).catch(() => {}),
+      repeatOne: (on) => MC.playerRepeatOne({ on }).catch(() => {}),
+      stop: () => MC.playerStop().catch(() => {}),
+      state: () => MC.playerState().catch(() => null),
+      cacheInfo: () => MC.cacheInfo().catch(() => null),
+      cacheLimit: (mb) => MC.cacheLimit({ mb }).catch(() => {}),
+      cacheClear: () => MC.cacheClear().catch(() => {}),
+      // handlers = { state, time, advanced, ended, error }; returns a function that removes them
+      on(handlers) {
+        const subs = [];
+        for (const e of EVENTS) if (handlers[e]) MC.addListener("p_" + e, (d) => handlers[e](d || {})).then((h) => subs.push(h));
+        return () => subs.forEach((h) => h.remove());
+      },
+    }
+  : null;
+
 export async function installedBuild() {
   try {
     return Number((await AppPlugin.getInfo()).build) || 0;
