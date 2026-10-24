@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { API_BASE } from "../api.js";
-import { isNative, nativeStatus } from "../native.js";
+import { isNative, nativeStatus, installedBuild, installedVersion } from "../native.js";
 import { usePlayer } from "../PlayerContext.jsx";
 
 const TEST_ID = "dQw4w9WgXcQ";
@@ -18,13 +18,15 @@ export default function Diagnostics({ onClose }) {
     setLines([]);
     setRunning(true);
     try {
-      log(`app: ${isNative ? "Android app" : "browser"} v${__APP_VERSION__}`);
+      if (isNative) log(`app: Android app v${(await installedVersion()) ?? "?"} (build ${(await installedBuild()) || "?"}), web v${__APP_VERSION__}`);
+      else log(`app: browser v${__APP_VERSION__}`);
       log(`page: ${location.origin}`);
       log(`api: ${API_BASE}`);
       log(`online: ${navigator.onLine}`);
       if (isNative) {
         const st = await nativeStatus();
         log(`native: ${JSON.stringify(st)}`);
+        log(`player: ${JSON.stringify(p.debugInfo?.())}`);
       }
 
       let t = Date.now();

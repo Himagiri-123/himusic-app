@@ -4,11 +4,19 @@ def cSdk = (rootProject.ext.has("compileSdkVersion") && rootProject.ext.compileS
 def mSdk = (rootProject.ext.has("minSdkVersion") && rootProject.ext.minSdkVersion != null) ? rootProject.ext.minSdkVersion : 23
 def tSdk = (rootProject.ext.has("targetSdkVersion") && rootProject.ext.targetSdkVersion != null) ? rootProject.ext.targetSdkVersion : 34
 
+// Version: -PappVersionName/-PappVersionCode  >  GitHub Actions run number  >  version.properties (bump it for local builds)
+def verProps = new Properties()
+def verFile = rootProject.file("version.properties")
+if (verFile.exists()) verFile.withInputStream { verProps.load(it) }
+def envRun = System.getenv("GITHUB_RUN_NUMBER")
+
 def vCodeProp = project.findProperty("appVersionCode")
-def vCode = (vCodeProp != null && vCodeProp.toString().trim() != "") ? vCodeProp.toString().trim().toInteger() : 1
+def vCode = (vCodeProp != null && vCodeProp.toString().trim() != "") ? vCodeProp.toString().trim().toInteger()
+        : (envRun ? envRun.toInteger() : (verProps.getProperty("versionCode") ?: "1").toInteger())
 
 def vNameProp = project.findProperty("appVersionName")
-def vName = (vNameProp != null && vNameProp.toString().trim() != "") ? vNameProp.toString().trim() : "1.0.0"
+def vName = (vNameProp != null && vNameProp.toString().trim() != "") ? vNameProp.toString().trim()
+        : (envRun ? "1.0." + envRun : (verProps.getProperty("versionName") ?: "1.0.0"))
 
 android {
     namespace "com.himusic.app"

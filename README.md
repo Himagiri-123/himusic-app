@@ -179,3 +179,9 @@ After pushing, run GitHub Actions "Run workflow", install the new APK manually o
 - Auto-queue (radio) keeps the language and mood (devotional / love / dance / sad) of the song you played.
 - Search, radio and home show single songs only (no jukeboxes, mashups, anything over 8 minutes). Searching the word "jukebox" or "mashup" on purpose still shows them.
 - Home rows are Telugu first (new releases, top songs, charts, love, dance, devotional, evergreen); Hindi and others come last.
+
+## Versions and background-playback troubleshooting
+
+- The APK version is `1.0.<GitHub run number>` (versionCode = run number). For local builds edit `client/android/version.properties`.
+- Settings shows the real app version + build ("HiMusic Android app v1.0.37 (build 37)"). The self-test prints it too, plus the native engine / notification state.
+- Phones like Vivo / Xiaomi / Oppo stop background music unless the app may ignore battery limits: Settings -> "Background playback" -> Allow (also set Battery to Unrestricted / allow auto-start in the phone settings).

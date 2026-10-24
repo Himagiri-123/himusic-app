@@ -5,7 +5,7 @@ import { useDownloads } from "./downloads.jsx";
 import { useSettings, resolveQuality, connectionKind, EQ_PRESETS } from "./settings.jsx";
 import { SILENT_WAV } from "./silent.js";
 import { pushEntry, goBack } from "./historyStack.js";
-import { isNative, nativeMedia, nativePlayer } from "./native.js";
+import { isNative, nativeMedia, nativePlayer, nativeStatus } from "./native.js";
 
 // Android app: the native engine (ExoPlayer in a foreground service) plays the music so it never depends
 // on the WebView. NATIVE_OK is false on the website and in old APKs, which keep using the web player.
@@ -96,6 +96,7 @@ export function PlayerProvider({ children }) {
   const nativePos = useRef(0);
   const seekHold = useRef({ until: 0, to: 0 }); // ignore stale position ticks right after a seek
   const nativeFailedAt = useRef(0);
+  const lastNativeErr = useRef("");
   const syncSeq = useRef(0);
   const syncTimer = useRef(null);
   const syncNativeRef = useRef(null);
@@ -151,6 +152,17 @@ export function PlayerProvider({ children }) {
     const m = `"${t}" ${why}.${skipping ? " Moving to the next song..." : ""}`;
     setError(m);
     showToast?.(m);
+  };
+  // phones like Vivo / Xiaomi / Oppo stop background music unless the app is allowed to ignore battery limits
+  const batteryHint = async () => {
+    try {
+      if (localStorage.getItem("hm_batt_hint")) return;
+      const st = await nativeStatus();
+      if (st && st.batteryUnrestricted === false) {
+        localStorage.setItem("hm_batt_hint", "1");
+        showToast?.("For music in the background: Settings > Background playback > Allow");
+      }
+    } catch {}
   };
   const syncSoon = () => {
     if (!nativeActive.current) return;
@@ -571,6 +583,7 @@ export function PlayerProvider({ children }) {
       if (!nativeActive.current || (d.id && d.id !== currentRef.current?.id)) return;
       // the native engine could not play this song: continue with the web player
       nativeFailedAt.current = Date.now();
+      lastNativeErr.current = `${d.code ?? ""} ${d.message || ""}`.trim();
       leaveNative();
       if (currentRef.current) loadRef.current?.(currentRef.current, nativePos.current);
     },
@@ -588,7 +601,19 @@ export function PlayerProvider({ children }) {
         ended: (d) => nativeEvRef.current.ended(d),
         error: (d) => nativeEvRef.current.error(d),
       });
-      nativePlayer.stop(); // a fresh page must not inherit a song from an old session
+      // the page was reloaded while the native engine kept playing: pick the song up again instead of stopping it
+      nativePlayer.state().then((d) => {
+        if (dead || !d || !d.id || currentRef.current) return;
+        const song = { id: d.id, title: d.title || "", artist: d.artist || "", thumbnail: d.artwork || "", duration: d.duration || 0 };
+        nativeActive.current = true;
+        nativeId.current = d.id;
+        nativePos.current = d.position || 0;
+        currentRef.current = song;
+        setCurrent(song);
+        setPlaying(!!d.playing);
+        setTime({ cur: d.position || 0, dur: d.duration || 0 });
+        syncSoon();
+      });
     });
     // while the screen was off the page may have missed events: catch up when it comes back
     const vis = async () => {
@@ -764,9 +789,11 @@ export function PlayerProvider({ children }) {
               if (token !== loadToken.current) return;
               curSource.current = "native";
               addHistory(song);
+              batteryHint();
               return;
-            } catch {
+            } catch (e) {
               nativeFailedAt.current = Date.now();
+              lastNativeErr.current = String(e?.message || e);
               leaveNative();
               if (token !== loadToken.current) return;
             }
@@ -1356,6 +1383,7 @@ export function PlayerProvider({ children }) {
         queue, shuffle, repeat, expandedRef,
         openFull, closeFull, setPref, play, playAll, toggle, next, previous, seek, toggleMode,
         sleep, setSleep,
+        debugInfo: () => ({ nativeOk: NATIVE_OK, nativeActive: nativeActive.current, source: curSource.current, webEngine: engineRef.current, nativeBlockedSec: Math.max(0, Math.round((nativeFailedAt.current + 180000 - Date.now()) / 1000)), lastNativeError: lastNativeErr.current }),
         toggleShuffle, cycleRepeat, addToQueue, playNext, removeFromQueue, clearQueue, playFromQueue,
       }}
     >

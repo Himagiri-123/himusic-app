@@ -4,7 +4,7 @@ import { usePlayer } from "../PlayerContext.jsx";
 import { useDownloads } from "../downloads.jsx";
 import { EQ_PRESETS, connectionKind, resolveQuality, useSettings } from "../settings.jsx";
 import Icon from "./Icon.jsx";
-import { isNative, nativePlayer } from "../native.js";
+import { isNative, nativePlayer, nativeStatus, requestBattery, installedBuild, installedVersion } from "../native.js";
 import { apkUrl } from "./UpdatePrompt.jsx";
 import Diagnostics from "./Diagnostics.jsx";
 import { cacheClear, cacheUsage } from "../cache.js";
@@ -45,6 +45,14 @@ export default function Settings() {
   const [usage, setUsage] = useState({ count: 0, bytes: 0 });
   const [updMsg, setUpdMsg] = useState("");
   const upd = useApkUpdate();
+  const [appVer, setAppVer] = useState("");
+  const [batt, setBatt] = useState(null); // true = app may run in the background without battery limits
+  const refreshNative = async () => {
+    if (!isNative) return;
+    const [v, b, st] = await Promise.all([installedVersion(), installedBuild(), nativeStatus()]);
+    setAppVer(`${v ?? "?"} (build ${b || "?"})`);
+    setBatt(st && typeof st.batteryUnrestricted === "boolean" ? st.batteryUnrestricted : null);
+  };
   const [nat, setNat] = useState(false); // true when the app's native cache is available
   const loadUsage = async () => {
     const n = nativePlayer ? await nativePlayer.cacheInfo() : null;
@@ -57,7 +65,10 @@ export default function Settings() {
     }
   };
   useEffect(() => {
-    if (s.open) loadUsage();
+    if (s.open) {
+      loadUsage();
+      refreshNative();
+    }
   }, [s.open]); // eslint-disable-line
   const limits = nat ? [[50, "50 MB"], [100, "100 MB"], [200, "200 MB"]] : [[50, "50 MB"], [100, "100 MB"], [200, "200 MB"], [500, "500 MB"]];
   if (!s.open) return null;
@@ -165,6 +176,14 @@ export default function Settings() {
               <Icon name="install" size={24} /> <span>Download Android App</span>
             </a>
           )}
+          {isNative && (
+            <button className="sheet-item" onClick={async () => { await requestBattery(); setTimeout(refreshNative, 1500); }}>
+              <Icon name="settings" size={24} />
+              <span>
+                Background playback: {batt === true ? "Allowed" : batt === false ? "Restricted - tap to allow" : "check"}
+              </span>
+            </button>
+          )}
           <button className="sheet-item" onClick={() => setDiag(true)}>
             <Icon name="star" size={24} /> <span>Playback self-test (troubleshoot)</span>
           </button>
@@ -187,7 +206,7 @@ export default function Settings() {
             </button>
           )}
           {updMsg && <p className="sub small set-version">{updMsg}</p>}
-          <p className="sub small set-version">HiMusic v{__APP_VERSION__}{isNative ? " (Android app)" : ""}</p>
+          <p className="sub small set-version">{isNative ? `HiMusic Android app v${appVer || "..."}` : `HiMusic v${__APP_VERSION__}`}</p>
           <button className="sheet-item danger" onClick={() => { close(); logout(); }}>
             <Icon name="logout" size={24} /> <span>Log out {user?.email ? `(${user.email})` : ""}</span>
           </button>

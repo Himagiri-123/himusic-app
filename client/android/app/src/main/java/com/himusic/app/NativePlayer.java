@@ -136,6 +136,7 @@ public final class NativePlayer {
 
             @Override
             public void onPlayerError(PlaybackException error) {
+                lastError = error.getErrorCodeName() + ": " + error.getMessage();
                 JSObject o = new JSObject();
                 o.put("code", error.errorCode);
                 o.put("message", String.valueOf(error.getMessage()));
@@ -272,11 +273,33 @@ public final class NativePlayer {
         }
     }
 
+    public static volatile String lastError = "";
+
+    /** for the self-test: what the native engine is doing right now */
+    public static JSObject debug() {
+        JSObject o = new JSObject();
+        o.put("engineReady", player != null);
+        o.put("engineActive", active);
+        if (player != null) {
+            o.put("enginePlaying", player.isPlaying());
+            o.put("engineState", player.getPlaybackState());
+            o.put("engineItems", player.getMediaItemCount());
+        }
+        o.put("engineError", lastError);
+        return o;
+    }
+
     public static JSObject snapshot() {
         JSObject o = new JSObject();
         if (player == null) return o;
         MediaItem cur = player.getCurrentMediaItem();
         o.put("id", cur == null ? "" : cur.mediaId);
+        JSONObject ct = cur == null ? null : tracks.get(cur.mediaId);
+        if (ct != null) { // lets a reloaded page pick up the song that is still playing
+            o.put("title", ct.optString("title"));
+            o.put("artist", ct.optString("artist"));
+            o.put("artwork", ct.optString("artwork"));
+        }
         o.put("playing", player.isPlaying());
         o.put("position", player.getCurrentPosition() / 1000.0);
         long d = player.getDuration();

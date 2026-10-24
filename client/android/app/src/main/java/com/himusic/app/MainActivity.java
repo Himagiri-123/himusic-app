@@ -32,7 +32,7 @@ public class MainActivity extends BridgeActivity {
     public void onPause() {
         super.onPause();
         // keep the web player (and its timers) running while music plays with the screen off / another app open
-        if (MediaService.playing && getBridge() != null && getBridge().getWebView() != null) {
+        if ((MediaService.playing || NativePlayer.active) && getBridge() != null && getBridge().getWebView() != null) {
             WebView wv = getBridge().getWebView();
             wv.onResume();
             wv.resumeTimers();

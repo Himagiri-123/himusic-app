@@ -21,6 +21,7 @@ export const nativeMedia = {
   },
 };
 
+export const requestBattery = () => (MC ? MC.requestBattery().catch(() => {}) : Promise.resolve());
 export const nativeStatus = () => (MC ? MC.status().catch((e) => ({ error: String(e?.message || e) })) : Promise.resolve(null));
 
 // The Android app plays music with its own native engine (ExoPlayer), outside the WebView.

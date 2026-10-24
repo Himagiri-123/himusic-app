@@ -73,7 +73,49 @@ public class MediaControlsPlugin extends Plugin {
         PowerManager pm = (PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
         o.put("batteryUnrestricted", pm != null && pm.isIgnoringBatteryOptimizations(getContext().getPackageName()));
         o.put("serviceRunning", MediaService.running);
+        o.put("servicePlaying", MediaService.playing);
+        o.put("serviceError", MediaService.lastError);
+        try {
+            boolean shown = false;
+            if (Build.VERSION.SDK_INT >= 23) {
+                android.app.NotificationManager nm = (android.app.NotificationManager) getContext().getSystemService(Context.NOTIFICATION_SERVICE);
+                for (android.service.notification.StatusBarNotification n : nm.getActiveNotifications()) if (n.getId() == 7) shown = true;
+            }
+            o.put("notificationShown", shown);
+        } catch (Exception ignored) {
+        }
+        JSObject d = NativePlayer.debug();
+        java.util.Iterator<String> keys = d.keys();
+        while (keys.hasNext()) {
+            String k = keys.next();
+            try { o.put(k, d.get(k)); } catch (Exception ignored) { }
+        }
         call.resolve(o);
+    }
+
+    /** asks Android to let HiMusic run in the background without battery limits (Vivo / Xiaomi / Oppo kill music otherwise) */
+    @PluginMethod
+    public void requestBattery(PluginCall call) {
+        try {
+            PowerManager pm = (PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
+            if (pm != null && pm.isIgnoringBatteryOptimizations(getContext().getPackageName())) {
+                call.resolve();
+                return;
+            }
+            Intent i = new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+            i.setData(android.net.Uri.parse("package:" + getContext().getPackageName()));
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(i);
+        } catch (Exception e) {
+            try {
+                Intent i = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                i.setData(android.net.Uri.parse("package:" + getContext().getPackageName()));
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                getContext().startActivity(i);
+            } catch (Exception ignored) {
+            }
+        }
+        call.resolve();
     }
 
     /* ---------- native music engine (see NativePlayer) ---------- */

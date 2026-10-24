@@ -38,6 +38,7 @@ public class MediaService extends Service {
     public static volatile Listener listener;
     public static volatile boolean running = false;
     public static volatile boolean playing = false;
+    public static volatile String lastError = ""; // why the foreground notification could not start (shown in the self-test)
 
     private MediaSessionCompat session;
     private PowerManager.WakeLock wakeLock;
@@ -125,6 +126,7 @@ public class MediaService extends Service {
                 startForeground(NOTIF_ID, n);
             }
         } catch (Exception e) {
+            lastError = String.valueOf(e);
             // not allowed to run as foreground right now; keep a plain notification
             ((NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE)).notify(NOTIF_ID, n);
         }
