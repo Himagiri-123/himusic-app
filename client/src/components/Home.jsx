@@ -85,7 +85,7 @@ export default function Home() {
     <div className="page">
       <div className="page-grad" style={{ background: `linear-gradient(180deg, ${rgb(accent, 0.8, 0.75)} 0%, #121212 340px)` }} />
       <header className="page-head">
-        <h1>{greeting()}</h1>
+        <h1 className="greet"><img className="greet-logo" src="/logo.png" alt="HiMusic" width="34" height="34" />{greeting()}</h1>
         <div className="head-actions">
           <button className="avatar" onClick={() => setMenuOpen((o) => !o)} aria-label="Account">
             {(user?.name || "U").trim()[0].toUpperCase()}

@@ -362,3 +362,6 @@ h2 { font-size: 1.35rem; font-weight: 800; letter-spacing: -.2px; }
 .upd-bar span { position: relative; display: block; text-align: center; font-size: .8rem; font-weight: 800; line-height: 22px; mix-blend-mode: difference; color: #fff; }
 .avatar { position: relative; }
 .avatar .upd-dot { position: absolute; top: 0; right: 0; width: 11px; height: 11px; border-radius: 50%; background: #ff4d4d; border: 2px solid #121212; }
+
+.greet{display:flex;align-items:center;gap:10px}
+.greet-logo{width:34px;height:34px;border-radius:9px;object-fit:cover;flex:none}

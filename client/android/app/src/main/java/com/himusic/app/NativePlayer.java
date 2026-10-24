@@ -129,7 +129,7 @@ public final class NativePlayer {
                     o.put("id", item.mediaId);
                     send("advanced", o);
                 }
-                currentKey = "hm:" + item.mediaId;
+                currentKey = keyOf(item.mediaId);
                 pushNotification();
                 trimLater();
             }
@@ -156,13 +156,20 @@ public final class NativePlayer {
 
     /* ---------------- commands ---------------- */
 
+    /** one cache entry per song AND quality: two bitrates must never share cached bytes (that breaks seeking) */
+    private static String keyOf(String id) {
+        JSONObject t = tracks.get(id);
+        String q = t == null ? "" : t.optString("q", "");
+        return "hm:" + id + (q.isEmpty() ? "" : ":" + q);
+    }
+
     private static MediaItem item(JSONObject t) {
         String id = t.optString("id");
         tracks.put(id, t);
         return new MediaItem.Builder()
                 .setMediaId(id)
                 .setUri(t.optString("url"))
-                .setCustomCacheKey("hm:" + id) // same key for every signed link of this song
+                .setCustomCacheKey(keyOf(id)) // same key for every signed link of this song (and quality)
                 .build();
     }
 
@@ -176,7 +183,7 @@ public final class NativePlayer {
         }
         if (items.isEmpty()) return;
         active = true;
-        currentKey = "hm:" + items.get(0).mediaId;
+        currentKey = keyOf(items.get(0).mediaId);
         player.setMediaItems(items, 0, Math.max(0, startMs));
         player.setPlayWhenReady(true);
         player.prepare();
@@ -210,7 +217,10 @@ public final class NativePlayer {
     }
 
     public static void seek(long ms) {
-        if (player != null) player.seekTo(Math.max(0, ms));
+        if (player != null) {
+            player.seekTo(Math.max(0, ms));
+            send("time", snapshot()); // the page shows the new position at once
+        }
         pushNotification();
     }
 

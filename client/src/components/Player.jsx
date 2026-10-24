@@ -131,6 +131,7 @@ export default function Player() {
   const { isLiked, toggleLike, setMenu } = useApp();
   const dl = useDownloads();
   const [sleepOpen, setSleepOpen] = useState(false);
+  const [scrub, setScrub] = useState(null); // slider position while the finger is down; the seek happens on release
   const sleepLeft = useSleepLeft();
   const { current } = p;
   const [view, setView] = useState("main"); // main | queue | lyrics
@@ -142,7 +143,13 @@ export default function Player() {
 
   if (!current) return null;
   const liked = isLiked(current.id);
-  const pct = p.time.dur ? Math.min(100, (p.time.cur / p.time.dur) * 100) : 0;
+  const shown = scrub ?? p.time.cur;
+  const pct = p.time.dur ? Math.min(100, (shown / p.time.dur) * 100) : 0;
+  const commitScrub = () => {
+    if (scrub == null) return;
+    p.seek(scrub);
+    setScrub(null);
+  };
   const status = p.error || (p.loading ? "Loading..." : cleanArtist(current.artist));
 
   if (!p.expanded) {
@@ -229,13 +236,17 @@ export default function Player() {
             min="0"
             max={p.time.dur || 0}
             step="1"
-            value={Math.min(p.time.cur || 0, p.time.dur || 0)}
-            onChange={(e) => p.seek(Number(e.target.value))}
+            value={Math.min(scrub ?? (p.time.cur || 0), p.time.dur || 0)}
+            onChange={(e) => setScrub(Number(e.target.value))}
+            onPointerUp={commitScrub}
+            onTouchEnd={commitScrub}
+            onKeyUp={commitScrub}
+            onBlur={commitScrub}
             style={{ "--pct": pct + "%" }}
             aria-label="Seek"
           />
           <div className="times">
-            <span>{fmt(p.time.cur)}</span>
+            <span>{fmt(shown)}</span>
             <span>{fmt(p.time.dur)}</span>
           </div>
 

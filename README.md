@@ -172,3 +172,10 @@ The next 2 songs are queued natively, so tracks change by themselves. Played son
 on-phone cache (Settings -> Smart cache: 50 / 100 / 200 MB, default 100 MB, Clear cache). Offline-downloaded songs,
 video mode and the website still use the normal web player (also used automatically if the native engine errors).
 After pushing, run GitHub Actions "Run workflow", install the new APK manually once, and clear the app data once.
+
+## Song matching, radio, Telugu home
+
+- The audio is chosen by a match score (title words, artist, duration) - never the first search hit. If only different songs are found the app says so (and tries the YouTube player) instead of playing the wrong track.
+- Auto-queue (radio) keeps the language and mood (devotional / love / dance / sad) of the song you played.
+- Search, radio and home show single songs only (no jukeboxes, mashups, anything over 8 minutes). Searching the word "jukebox" or "mashup" on purpose still shows them.
+- Home rows are Telugu first (new releases, top songs, charts, love, dance, devotional, evergreen); Hindi and others come last.

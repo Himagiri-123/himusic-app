@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { ytdlpEnabled, ytdlpDown, resolveAudio, ytdlpStatus, signAudio, verifyAudio, ensureYtdlp, dropAudio, QUALITIES } from "../ytdlp.js";
 
 const router = Router();
@@ -19,6 +19,7 @@ const list = (v) =>
     .map((s) => s.trim().replace(/\/$/, ""))
     .filter(Boolean);
 const uniq = (a) => [...new Set(a)];
+const toWords = (t = "") => String(t).toLowerCase().replace(/\([^)]*\)|\[[^\]]*\]/g, " ").split(/[^a-z0-9\u0900-\u0dff]+/).filter((w) => w.length > 1 && !/^(official|video|song|lyrical|lyrics|full|audio|hd)$/.test(w));
 
 async function getJSON(url, ms = 8000, headers) {
   const ctrl = new AbortController();
@@ -368,6 +369,21 @@ async function cached(key, ttl, fn) {
 // a tier that just failed is skipped for 3 minutes so typing stays fast
 const tierDownAt = {};
 
+// Only single songs: no jukeboxes, mashups, albums or anything longer than 8 minutes
+// (unless the user typed such a word on purpose, e.g. "jukebox")
+const MIX_WORDS = /\b(jukebox|juke box|nonstop|non-stop|non stop|mashup|mega ?mix|full album|back to back|all songs|audio jukebox|video jukebox|songs collection|hit songs collection|\d{1,3}\s*(best )?songs|top\s*\d{2,3}|playlist|live stream|24\/7)\b/i;
+const MAX_SINGLE_SECONDS = 8 * 60;
+export function onlySingles(results, query = "") {
+  const wantsMix = MIX_WORDS.test(query) || /\b(mix|album|mashup)\b/i.test(query);
+  if (wantsMix) return results;
+  return results.filter((r) => {
+    const d = Number(r.duration) || 0;
+    if (d > MAX_SINGLE_SECONDS) return false;
+    if (MIX_WORDS.test(r.title || "")) return false;
+    return true;
+  });
+}
+
 async function runSearch(q) {
   return cached(`s:${q.toLowerCase()}`, 60 * 60 * 1000, async () => {
     const errors = [];
@@ -375,7 +391,7 @@ async function runSearch(q) {
     if (!tiers.length) tiers = SEARCH_TIERS;
     for (const [name, fn] of tiers) {
       try {
-        const results = await fn(q);
+        const results = onlySingles(await fn(q), q);
         if (results?.length) {
           delete tierDownAt[name];
           return { results, source: name };
@@ -440,7 +456,7 @@ router.get("/stream/:id", async (req, res) => {
     // Tier 0: our own yt-dlp engine, streamed through /audio/:id (best for lock-screen playback)
     if (ytdlpEnabled() && !ytdlpDown()) {
       try {
-        const hint = req.query.t ? { title: String(req.query.t).slice(0, 160), artist: String(req.query.a || "").slice(0, 100) } : null;
+        const hint = req.query.t ? { title: String(req.query.t).slice(0, 160), artist: String(req.query.a || "").slice(0, 100), duration: Number(req.query.d) || 0 } : null;
         await resolveAudio(id, q, "audio", { hint });
         const a = signAudio(id, "audio", q);
         const v = signAudio(id, "video", "normal"); // video is only resolved if the user actually opens it
@@ -499,13 +515,53 @@ router.get("/audio/:id", async (req, res) => {
       } catch {}
       if (!up.ok && up.status !== 206) return res.status(502).end();
     }
-    res.status(up.status);
-    for (const h of ["content-type", "content-length", "content-range", "accept-ranges"]) {
-      const v = up.headers.get(h);
-      if (v) res.set(h, v);
+    res.set("Accept-Ranges", "bytes");
+    const asked = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range || "");
+    const total = Number(up.headers.get("content-length")) || 0;
+    let slice = null;
+    if (asked && up.status === 200 && total) {
+      // the file server ignored our Range header: cut the requested part out ourselves, otherwise a seek
+      // would restart from byte 0 and land on the wrong time (or fail)
+      const start = Number(asked[1]);
+      if (start >= total) return res.status(416).set("Content-Range", `bytes */${total}`).end();
+      const end = asked[2] ? Math.min(Number(asked[2]), total - 1) : total - 1;
+      slice = { start, end };
+      res.status(206);
+      res.set("Content-Range", `bytes ${start}-${end}/${total}`);
+      res.set("Content-Length", String(end - start + 1));
+      const ct = up.headers.get("content-type");
+      if (ct) res.set("Content-Type", ct);
+    } else {
+      res.status(up.status);
+      for (const h of ["content-type", "content-length", "content-range"]) {
+        const v = up.headers.get(h);
+        if (v) res.set(h, v);
+      }
     }
     res.set("Cache-Control", "private, max-age=21600");
-    const body = Readable.fromWeb(up.body);
+    let body = Readable.fromWeb(up.body);
+    if (slice) {
+      let skip = slice.start;
+      let left = slice.end - slice.start + 1;
+      body = body.pipe(
+        new Transform({
+          transform(chunk, _enc, cb) {
+            if (skip > 0) {
+              if (chunk.length <= skip) {
+                skip -= chunk.length;
+                return cb();
+              }
+              chunk = chunk.subarray(skip);
+              skip = 0;
+            }
+            if (left <= 0) return cb();
+            if (chunk.length > left) chunk = chunk.subarray(0, left);
+            left -= chunk.length;
+            cb(null, chunk);
+          },
+        })
+      );
+    }
     req.on("close", () => body.destroy());
     body.on("error", () => res.end());
     body.pipe(res);
@@ -515,22 +571,75 @@ router.get("/audio/:id", async (req, res) => {
   }
 });
 
-// Songs "like this one" for auto-play (radio): other tracks by the same artist / same mood, never repeats the seed
+/* ---------- radio / auto-queue: keep the language and the mood of the song that was played ---------- */
+const LANGS = [
+  ["telugu", /[\u0C00-\u0C7F]|\b(telugu|tollywood|tfi)\b|aditya music|lahari music|mango music|volga videos|saregama telugu|geetha arts|shreyas media/i],
+  ["tamil", /[\u0B80-\u0BFF]|\b(tamil|kollywood)\b|think music|sony music south/i],
+  ["kannada", /[\u0C80-\u0CFF]|\b(kannada|sandalwood)\b|anand audio|pm audio/i],
+  ["malayalam", /[\u0D00-\u0D7F]|\b(malayalam|mollywood)\b|manorama music|satyam audios/i],
+  ["punjabi", /[\u0A00-\u0A7F]|\b(punjabi)\b|speed records|white hill/i],
+  ["hindi", /[\u0900-\u097F]|\b(hindi|bollywood)\b|t-series|t series|zee music|tips official|tips music|yrf|sony music india/i],
+];
+const detectLang = (t = "") => (LANGS.find(([, re]) => re.test(t)) || [])[0] || "";
+const DEITY = /\b(ayyappa|ayyappan|shiva|siva|venkateswara|venkatesa|balaji|govinda|hanuman|krishna|rama|ganesh|ganapati|durga|lakshmi|annamayya|sai ?baba|subramanya|murugan|narasimha|saraswati|vishnu)\b/i;
+const MOODS = [
+  ["devotional", /devotional|bhakti|bhakthi|bhajan|aarti|arati|stotram|stotra|suprabhatam|keerthana|kirtan|mantra|chalisa|ashtakam|namah|namaha|swamy|swami|ayyappa|venkateswara|govinda|hanuman|ganapati|ganesh|annamayya|\bom\b|\b(shiva|siva|durga|lakshmi)\b/i],
+  ["sad", /\b(sad|breakup|heartbreak|viraham|judai|bewafa|dard|pain|tears)\b/i],
+  ["dance", /\b(mass|dj|dance|item|folk|party|banger|peppy|jathara|dhamaka|kuthu|thaggede)\b/i],
+  ["love", /\b(love|prema|premalo|premiste|romantic|melody|ishq|pyar|mohabbat|dil|hrudayam|kanulu|priya|sakhi)\b/i],
+];
+const detectMood = (t = "") => (MOODS.find(([, re]) => re.test(t)) || [])[0] || "";
+const MOOD_WORD = { devotional: "devotional", sad: "sad", dance: "mass dance", love: "love" };
+
+// GET /api/music/related?title=&artist=&exclude=a,b,c
 router.get("/related", async (req, res) => {
-  const title = String(req.query.title || "").slice(0, 120);
+  const title = String(req.query.title || "").slice(0, 160);
   const artist = String(req.query.artist || "").replace(/ - Topic$/i, "").slice(0, 80);
   const exclude = new Set(String(req.query.exclude || "").split(",").filter(Boolean));
   if (!title && !artist) return res.json({ results: [] });
-  const queries = [`${artist} songs`.trim(), `${title} ${artist} similar songs`.trim()];
+  const seedText = `${title} ${artist}`;
+  const lang = detectLang(seedText);
+  const mood = detectMood(title) || detectMood(artist);
+  const deity = (title.match(DEITY) || [])[0] || "";
+  const moodWord = MOOD_WORD[mood] || "";
+  const L = lang ? `${lang} ` : "";
+  const queries = [];
+  if (mood && moodWord) {
+    if (artist) queries.push(`${artist} ${L}${moodWord} songs`.trim());
+    if (deity) queries.push(`${deity} ${L}${moodWord} songs`.trim());
+    queries.push(`${L}${moodWord} songs`.trim());
+  }
+  if (artist) queries.push(`${artist} ${L}songs`.trim());
+  if (!mood) queries.push(`${L}songs like ${title}`.trim());
+  const seenQ = new Set();
   const out = [];
+  const seedSet = new Set(toWords(title));
+  const accept = (r, strict) => {
+    if (!r.id || exclude.has(r.id) || out.some((o) => o.id === r.id)) return false;
+    if (toWords(r.title).join(" ") === [...seedSet].join(" ")) return false; // same song re-uploaded
+    const txt = `${r.title} ${r.artist}`;
+    const rl = detectLang(txt);
+    if (lang && rl && rl !== lang) return false; // keep the language of the seed song
+    if (strict && mood === "devotional" && detectMood(txt) !== "devotional") return false;
+    if (strict && mood && mood !== "devotional" && detectMood(txt) === "devotional") return false;
+    return true;
+  };
+  const pool = [];
   for (const qq of queries) {
+    if (seenQ.has(qq)) continue;
+    seenQ.add(qq);
     try {
       const { results } = await runSearch(qq);
-      for (const r of results) if (r.id && !exclude.has(r.id) && !out.some((o) => o.id === r.id)) out.push(r);
+      pool.push(...results);
     } catch {}
-    if (out.length >= 12) break;
+    if (pool.length >= 40) break;
   }
-  res.json({ results: out.slice(0, 20) });
+  // 1st pass: same language AND same mood; 2nd pass (only if too few): same language
+  for (const r of pool) if (accept(r, true)) out.push(r);
+  if (out.length < 8) for (const r of pool) if (accept(r, false)) out.push(r);
+  // songs of the same mood first
+  if (mood) out.sort((x, y) => (detectMood(`${y.title} ${y.artist}`) === mood) - (detectMood(`${x.title} ${x.artist}`) === mood));
+  res.json({ results: out.slice(0, 20), lang, mood });
 });
 
 router.get("/debug/ytdlp", async (req, res) => {
@@ -681,23 +790,33 @@ router.get("/suggest", async (req, res) => {
 
 const TOP_ARTISTS = [
   "Sid Sriram",
+  "Devi Sri Prasad",
+  "Thaman S",
+  "S. P. Balasubrahmanyam",
+  "Anurag Kulkarni",
+  "M. M. Keeravani",
+  "Shreya Ghoshal",
+  "Chinmayi",
+  "Armaan Malik",
   "Anirudh Ravichander",
   "Arijit Singh",
   "A. R. Rahman",
-  "Devi Sri Prasad",
-  "Shreya Ghoshal",
-  "S. P. Balasubrahmanyam",
-  "Thaman S",
 ];
 
-// GET /api/music/home?artist=NAME
+// GET /api/music/home?artist=NAME  -> Telugu first (new releases, top charts, love, devotional ...), other languages last
 router.get("/home", async (req, res) => {
   const artist = (req.query.artist || "").toString().trim().slice(0, 80);
+  const year = new Date().getFullYear();
   const jobs = [
-    ["trending", "Trending Hits", "trending songs india"],
-    ["made", "Made for You", artist ? `${artist} songs` : "chill telugu songs"],
-    ["telugu", "Top Telugu", "top telugu songs"],
-    ["devotional", "Devotional", "telugu devotional songs"],
+    ["new", "New Telugu Releases", `new telugu songs ${year}`],
+    ["telugu", "Top Telugu Songs", "top telugu songs"],
+    ["charts", "Telugu Top Charts", "telugu top 50 chart songs"],
+    ["made", "Made for You", artist ? `${artist} telugu songs` : "telugu melody songs"],
+    ["love", "Telugu Love Songs", "telugu love songs"],
+    ["dance", "Telugu Mass & Dance", "telugu mass dance songs"],
+    ["devotional", "Telugu Devotional", "telugu devotional songs"],
+    ["classics", "Telugu Evergreen Hits", "telugu evergreen hit songs"],
+    ["trending", "Trending in India", "trending songs india"],
     ["hindi", "Hindi Hits", "latest hindi songs"],
   ];
   const rows = (
@@ -714,7 +833,7 @@ router.get("/home", async (req, res) => {
   ).filter(Boolean);
 
   try {
-    const items = await cached("top-artists", 24 * 60 * 60 * 1000, async () => {
+    const items = await cached("top-artists-v2", 24 * 60 * 60 * 1000, async () => {
       const found = (
         await Promise.all(TOP_ARTISTS.map((n) => searchArtists(n, { noApi: true }).then((a) => a[0]).catch(() => null)))
       ).filter(Boolean);

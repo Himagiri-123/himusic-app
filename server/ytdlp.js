@@ -133,6 +133,11 @@ const SAAVN_WRAPPERS = [
   "https://jiosaavn-api-privatecvc2.vercel.app/search/songs?query=",
 ];
 
+const dec = (t = "") =>
+  String(t).replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&#039;|&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+
+// every search source returns candidates: { title, artist, duration, url, alts, ... } so the best MATCH can be chosen,
+// not simply the first hit (the first hit is often a remix / another song with a similar name)
 async function searchSaavnWrapper(baseUrl, query, q) {
   const r = await fetch(`${baseUrl}${encodeURIComponent(query)}`, {
     headers: { "User-Agent": UA, Accept: "application/json" },
@@ -142,14 +147,31 @@ async function searchSaavnWrapper(baseUrl, query, q) {
   const j = await r.json();
   const results = j?.data?.results || j?.results || [];
   if (!results.length) throw new Error("no results");
-  const dls = results[0]?.downloadUrl || [];
-  if (!dls.length) throw new Error("no downloadUrl");
   const targetQ = q === "low" ? "96kbps" : q === "high" ? "320kbps" : "160kbps";
-  const picked = dls.find((d) => d.quality === targetQ) || dls.find((d) => d.quality === "160kbps") || dls[dls.length - 1];
-  const streamUrl = picked?.url || picked?.link;
-  if (!streamUrl) throw new Error("empty stream url");
-  const alts = dls.map((d) => d.url || d.link).filter((u) => u && u !== streamUrl);
-  return { url: streamUrl, alts, mime: "audio/mp4", abr: q === "low" ? 96 : q === "high" ? 320 : 160, size: 0, headers: { "User-Agent": UA }, source: "saavn-cdn" };
+  const out = [];
+  for (const it of results.slice(0, 6)) {
+    const dls = it?.downloadUrl || [];
+    if (!dls.length) continue;
+    const picked = dls.find((d) => d.quality === targetQ) || dls.find((d) => d.quality === "160kbps") || dls[dls.length - 1];
+    const streamUrl = picked?.url || picked?.link;
+    if (!streamUrl) continue;
+    const prim = it?.artists?.primary;
+    out.push({
+      title: dec(it.name || it.title || ""),
+      artist: dec(Array.isArray(prim) ? prim.map((x) => x.name).join(" ") : it.primaryArtists || ""),
+      album: dec(it?.album?.name || ""),
+      duration: Number(it.duration) || 0,
+      url: streamUrl,
+      alts: dls.map((d) => d.url || d.link).filter((u) => u && u !== streamUrl),
+      mime: "audio/mp4",
+      abr: q === "low" ? 96 : q === "high" ? 320 : 160,
+      size: 0,
+      headers: { "User-Agent": UA },
+      source: "saavn-cdn",
+    });
+  }
+  if (!out.length) throw new Error("no downloadUrl");
+  return out;
 }
 
 async function searchSaavnDirect(query, q) {
@@ -157,33 +179,115 @@ async function searchSaavnDirect(query, q) {
   const r = await fetch(apiUrl, { headers: { "User-Agent": UA, Accept: "application/json" }, signal: AbortSignal.timeout(5000) });
   if (!r.ok) throw new Error(`saavn direct ${r.status}`);
   const j = await r.json();
-  for (const item of j?.results || []) {
+  const out = [];
+  for (const item of (j?.results || []).slice(0, 6)) {
     const preview = item?.media_preview_url || item?.more_info?.vlink;
     if (preview && preview.includes("saavncdn.com")) {
       const base = preview.replace("preview.saavncdn.com", "aac.saavncdn.com");
       const at = (kbps) => base.replace(/_96_p\.mp4$/, `_${kbps}.mp4`);
       const order = q === "low" ? [96, 160, 320, 128] : q === "high" ? [320, 160, 96, 128] : [160, 96, 320, 128];
       const urls = [...new Set(order.map(at))];
-      return { url: urls[0], alts: urls.slice(1), mime: "audio/mp4", abr: order[0], size: 0, headers: { "User-Agent": UA }, source: "jiosaavn-direct" };
+      out.push({
+        title: dec(item.title || item.song || ""),
+        artist: dec(item?.more_info?.primary_artists || item.subtitle || item.primary_artists || ""),
+        album: dec(item?.more_info?.album || ""),
+        duration: Number(item?.more_info?.duration || item.duration) || 0,
+        url: urls[0],
+        alts: urls.slice(1),
+        mime: "audio/mp4",
+        abr: order[0],
+        size: 0,
+        headers: { "User-Agent": UA },
+        source: "jiosaavn-direct",
+      });
     }
   }
-  throw new Error("no direct saavn stream");
+  if (!out.length) throw new Error("no direct saavn stream");
+  return out;
+}
+
+/* ---- matching: is this Saavn track really the song the app shows? ---- */
+const NOISE = new Set(
+  "official full video audio lyrical lyric lyrics song songs hd 4k 8k hq mv teaser trailer jukebox with from movie film the a an of and in to feat ft original soundtrack ost telugu hindi tamil kannada malayalam new latest version reprise remastered".split(" ")
+);
+const norm = (t) =>
+  String(t || "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\u0900-\u0dff]+/g, " ")
+    .trim();
+const toks = (t) => norm(t).split(" ").filter((w) => w.length > 1 && !NOISE.has(w));
+// small spelling differences are normal in transliterated titles (prema / premaa, bomma / bommaa)
+const sameWord = (a, b) => a === b || (a.length >= 4 && b.length >= 4 && (a.startsWith(b) || b.startsWith(a) || a.replace(/(.)\1/g, "$1") === b.replace(/(.)\1/g, "$1")));
+const coverage = (need, have) => (need.length ? need.filter((w) => have.some((h) => sameWord(w, h))).length / need.length : 0);
+
+function scoreCandidate(c, want) {
+  const candCore = toks(String(c.title).replace(/\([^)]*\)|\[[^\]]*\]/g, " "));
+  const candAll = toks(`${c.title} ${c.artist} ${c.album}`);
+  const wantCoreAll = toks(want.title);
+  const wantHead = toks(String(want.title).split(/[|\-–—:/]+/)[0].replace(/\([^)]*\)|\[[^\]]*\]/g, " "));
+  const wantAll = toks(`${want.title} ${want.artist}`);
+  if (!candCore.length) return 0;
+  const cover = coverage(candCore, wantAll); // does the YouTube title contain this song's name?
+  const rev = coverage(wantHead.length ? wantHead : wantCoreAll, candAll); // does this song contain the YouTube name?
+  let score = cover * 0.6 + rev * 0.4;
+  const wa = toks(want.artist);
+  if (wa.length && coverage(wa, toks(c.artist)) > 0) score += 0.1;
+  if (want.duration > 0 && c.duration > 0) {
+    const diff = Math.abs(want.duration - c.duration);
+    if (diff <= 6) score += 0.15;
+    else if (diff > 30) score -= 0.35;
+  }
+  if (c.duration > 900) score -= 0.5; // compilations
+  const VAR = /\b(remix|mashup|cover|instrumental|karaoke|slowed|reverb|8d|lofi|lo-fi|unplugged|version)\b/i;
+  if (VAR.test(c.title) && !VAR.test(want.title)) score -= 0.3; // a remix / cover is not the song the app shows
+  return score;
+}
+const MIN_SCORE = 0.55;
+
+async function collect(tasks, want) {
+  const all = [];
+  await new Promise((resolve) => {
+    let done = 0;
+    let timer = null;
+    const finish = () => resolve();
+    for (const t of tasks)
+      t.then((arr) => {
+        all.push(...arr);
+        if (arr.some((c) => scoreCandidate(c, want) >= 0.85)) return finish(); // a clear winner: do not wait for slower sources
+        if (!timer) timer = setTimeout(finish, 900);
+      })
+        .catch(() => {})
+        .finally(() => {
+          if (++done === tasks.length) finish();
+        });
+  });
+  return all;
 }
 
 async function resolveFastAudio(id, q, hint) {
   const meta = hint?.title ? { title: hint.title, author: hint.artist || "" } : await getYouTubeMeta(id);
   const queries = buildSearchQueries(meta);
   if (!queries.length) throw new Error("could not read the song title");
+  const want = { title: meta.title, artist: meta.author || "", duration: hint?.duration || 0 };
+  let best = 0;
   for (const query of queries) {
     const tasks = [searchSaavnDirect(query, q), ...SAAVN_WRAPPERS.map((w) => searchSaavnWrapper(w, query, q))];
-    try {
-      const first = await Promise.any(tasks);
-      if (await pickWorking(first)) return first;
-      // the fastest answer pointed to a missing file: check the other sources too
-      for (const t of await Promise.allSettled(tasks)) if (t.status === "fulfilled" && t.value !== first && (await pickWorking(t.value))) return t.value;
-    } catch {}
+    const ranked = (await collect(tasks, want))
+      .map((c) => ({ c, s: scoreCandidate(c, want) }))
+      .sort((x, y) => y.s - x.s);
+    if (ranked.length) best = Math.max(best, ranked[0].s);
+    for (const { c, s } of ranked.filter((x) => x.s >= MIN_SCORE).slice(0, 4)) {
+      if (await pickWorking(c)) {
+        c.matchScore = Math.round(s * 100) / 100;
+        return c;
+      }
+    }
   }
-  throw new Error("no matching stream found");
+  const err = new Error(best > 0 ? "no matching audio found for this song (only different songs were found)" : "no matching stream found");
+  err.code = "NO_MATCH";
+  throw err;
 }
 
 // A guessed CDN address can be a 404 (e.g. no 160 kbps file for that song). Ask for 2 bytes of each candidate and
@@ -202,10 +306,15 @@ async function pickWorking(res) {
   return false;
 }
 
+const hints = new Map();
 async function run(id, q, kind, opts) {
   const attempts = [];
+  if (opts?.hint) {
+    if (hints.size > 500) hints.clear();
+    hints.set(id, opts.hint);
+  }
   try {
-    const res = await resolveFastAudio(id, q, opts?.hint);
+    const res = await resolveFastAudio(id, q, opts?.hint || hints.get(id));
     goodClient = res.source || "saavn-cdn";
     lastError = "";
     attempts.push({ client: goodClient, ok: true });

@@ -56,7 +56,7 @@ function loadYT() {
 }
 
 export function PlayerProvider({ children }) {
-  const { addHistory, user } = useApp();
+  const { addHistory, user, showToast } = useApp();
   const resumeRef = useRef(null); // position to continue from after the app was closed
   const loadRef = useRef(null);
   const lastSave = useRef(0);
@@ -94,6 +94,7 @@ export function PlayerProvider({ children }) {
   const nativeActive = useRef(false); // the current song is playing in the native engine
   const nativeId = useRef(null); // id of the track the native engine is on
   const nativePos = useRef(0);
+  const seekHold = useRef({ until: 0, to: 0 }); // ignore stale position ticks right after a seek
   const nativeFailedAt = useRef(0);
   const syncSeq = useRef(0);
   const syncTimer = useRef(null);
@@ -144,6 +145,13 @@ export function PlayerProvider({ children }) {
   const getEl = () => elsRef.current[activeRef.current];
   const getIdle = () => elsRef.current[1 - activeRef.current];
   const isActive = (e) => e.currentTarget === getEl();
+  // tell the user which song failed and why, instead of silently skipping it
+  const failMsg = (why, skipping) => {
+    const t = currentRef.current?.title || "This song";
+    const m = `"${t}" ${why}.${skipping ? " Moving to the next song..." : ""}`;
+    setError(m);
+    showToast?.(m);
+  };
   const syncSoon = () => {
     if (!nativeActive.current) return;
     clearTimeout(syncTimer.current);
@@ -288,7 +296,7 @@ export function PlayerProvider({ children }) {
             }
           },
           onError: () => {
-            setError("This song can't be played in the YouTube player. Skipping...");
+            failMsg("can't be played in the YouTube player");
             if (errCount.current++ < 3) setTimeout(() => nextRef.current?.(), 1200);
           },
         },
@@ -414,6 +422,7 @@ export function PlayerProvider({ children }) {
     artist: song.artist || "",
     artwork: song.id ? `https://i.ytimg.com/vi/${song.id}/hqdefault.jpg` : song.thumbnail || "",
     url: withNocap(s.audioUrl),
+    q: quality(),
     duration: song.duration || 0,
   });
   const startNative = async (song, s, resumeAt) => {
@@ -533,6 +542,8 @@ export function PlayerProvider({ children }) {
     },
     time: (d) => {
       if (!nativeActive.current || (d.id && d.id !== currentRef.current?.id)) return;
+      const h = seekHold.current;
+      if (Date.now() < h.until && Math.abs((d.position || 0) - h.to) > 2.5) return; // old tick from before the seek
       nativePos.current = d.position || 0;
       setTime({ cur: d.position || 0, dur: d.duration || currentRef.current?.duration || 0 });
       const now = Date.now();
@@ -788,7 +799,7 @@ export function PlayerProvider({ children }) {
         addHistory(song);
       } catch (e) {
         if (token !== loadToken.current) return;
-        setError(e.message || "Could not load the YouTube player");
+        failMsg(e.message || "could not be loaded");
         setPlaying(false);
         setLoading(false);
       }
@@ -838,6 +849,7 @@ export function PlayerProvider({ children }) {
   const seek = useCallback((t) => {
     if (nativeActive.current) {
       nativePos.current = t;
+      seekHold.current = { until: Date.now() + 1500, to: t };
       nativePlayer.seek(Math.round(t * 1000));
       setTime((x) => ({ ...x, cur: t }));
     } else if (engineRef.current === "embed") {
@@ -1281,8 +1293,8 @@ export function PlayerProvider({ children }) {
       load(currentRef.current, el.currentTime);
       return;
     }
-    setError(`Playback failed (code ${el.error?.code ?? "?"}). Skipping...`);
-    if (errCount.current++ < 3) setTimeout(() => nextRef.current?.(), 1500);
+    failMsg(`failed to play (error ${el.error?.code ?? "?"})`, true);
+    if (errCount.current++ < 3) setTimeout(() => nextRef.current?.(), 2500);
   };
 
   const onTimeUpdate = (e) => {
