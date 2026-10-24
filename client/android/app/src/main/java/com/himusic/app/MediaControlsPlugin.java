@@ -64,33 +64,44 @@ public class MediaControlsPlugin extends Plugin {
     }
 
     @PluginMethod
-    public void status(PluginCall call) {
-        JSObject o = new JSObject();
-        o.put("sdk", Build.VERSION.SDK_INT);
-        boolean permission = Build.VERSION.SDK_INT < 33
-                || ContextCompat.checkSelfPermission(getContext(), Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
-        o.put("notificationsAllowed", permission && NotificationManagerCompat.from(getContext()).areNotificationsEnabled());
-        PowerManager pm = (PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
-        o.put("batteryUnrestricted", pm != null && pm.isIgnoringBatteryOptimizations(getContext().getPackageName()));
-        o.put("serviceRunning", MediaService.running);
-        o.put("servicePlaying", MediaService.playing);
-        o.put("serviceError", MediaService.lastError);
-        try {
-            boolean shown = false;
-            if (Build.VERSION.SDK_INT >= 23) {
-                android.app.NotificationManager nm = (android.app.NotificationManager) getContext().getSystemService(Context.NOTIFICATION_SERVICE);
-                for (android.service.notification.StatusBarNotification n : nm.getActiveNotifications()) if (n.getId() == 7) shown = true;
+    public void status(final PluginCall call) {
+        // ExoPlayer may only be touched from the main thread, so build the answer there
+        NativePlayer.run(() -> {
+            JSObject o = new JSObject();
+            try {
+                o.put("sdk", Build.VERSION.SDK_INT);
+                boolean permission = Build.VERSION.SDK_INT < 33
+                        || ContextCompat.checkSelfPermission(getContext(), Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
+                o.put("notificationsAllowed", permission && NotificationManagerCompat.from(getContext()).areNotificationsEnabled());
+                PowerManager pm = (PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
+                o.put("batteryUnrestricted", pm != null && pm.isIgnoringBatteryOptimizations(getContext().getPackageName()));
+                o.put("serviceRunning", MediaService.running);
+                o.put("servicePlaying", MediaService.playing);
+                o.put("serviceError", MediaService.lastError);
+            } catch (Exception e) {
+                o.put("statusError", String.valueOf(e));
             }
-            o.put("notificationShown", shown);
-        } catch (Exception ignored) {
-        }
-        JSObject d = NativePlayer.debug();
-        java.util.Iterator<String> keys = d.keys();
-        while (keys.hasNext()) {
-            String k = keys.next();
-            try { o.put(k, d.get(k)); } catch (Exception ignored) { }
-        }
-        call.resolve(o);
+            try {
+                boolean shown = false;
+                if (Build.VERSION.SDK_INT >= 23) {
+                    android.app.NotificationManager nm = (android.app.NotificationManager) getContext().getSystemService(Context.NOTIFICATION_SERVICE);
+                    for (android.service.notification.StatusBarNotification n : nm.getActiveNotifications()) if (n.getId() == 7) shown = true;
+                }
+                o.put("notificationShown", shown);
+            } catch (Exception ignored) {
+            }
+            try {
+                JSObject d = NativePlayer.debug();
+                java.util.Iterator<String> keys = d.keys();
+                while (keys.hasNext()) {
+                    String k = keys.next();
+                    o.put(k, d.get(k));
+                }
+            } catch (Exception e) {
+                o.put("engineDebugError", String.valueOf(e));
+            }
+            call.resolve(o);
+        });
     }
 
     /** asks Android to let HiMusic run in the background without battery limits (Vivo / Xiaomi / Oppo kill music otherwise) */
