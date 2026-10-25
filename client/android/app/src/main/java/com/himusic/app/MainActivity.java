@@ -29,6 +29,12 @@ public class MainActivity extends BridgeActivity {
     }
 
     @Override
+    public void onResume() {
+        super.onResume();
+        NativePlayer.refreshNotification();
+    }
+
+    @Override
     public void onPause() {
         super.onPause();
         // keep the web player (and its timers) running while music plays with the screen off / another app open

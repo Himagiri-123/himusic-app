@@ -335,6 +335,11 @@ public final class NativePlayer {
     }
 
     /** the lock-screen / notification card is drawn by MediaService from the same data the web page used to send */
+    /** called when the app comes to the front: lets the service enter foreground again if it was refused in the background */
+    public static void refreshNotification() {
+        if (active) run(NativePlayer::pushNotification);
+    }
+
     private static void pushNotification() {
         if (player == null || app == null) return;
         MediaItem cur = player.getCurrentMediaItem();

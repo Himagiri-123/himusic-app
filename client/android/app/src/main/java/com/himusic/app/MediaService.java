@@ -125,15 +125,14 @@ public class MediaService extends Service {
             } else {
                 startForeground(NOTIF_ID, n);
             }
+            lastError = "";
         } catch (Exception e) {
             lastError = String.valueOf(e);
             // not allowed to run as foreground right now; keep a plain notification
             ((NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE)).notify(NOTIF_ID, n);
         }
-        if (!playing) {
-            // paused: let the user swipe the notification away
-            stopForeground(false);
-        }
+        // NOTE: the service stays in the foreground while paused. Dropping it and re-entering foreground later
+        // (e.g. after a short buffering pause with the screen off) is forbidden by Android 12+ and kills the music.
         updateWakeLock();
     }
 
