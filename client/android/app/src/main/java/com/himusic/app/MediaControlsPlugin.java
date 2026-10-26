@@ -142,7 +142,7 @@ public class MediaControlsPlugin extends Plugin {
     @PluginMethod
     public void playerPlay(final PluginCall call) {
         final com.getcapacitor.JSArray list = call.getArray("tracks");
-        final long start = call.getLong("startMs", 0L);
+        final long start = call.getDouble("startMs", 0.0).longValue(); // getLong() ignores whole numbers that JSON reads as Integer
         if (list == null || list.length() == 0) {
             call.reject("no tracks");
             return;
@@ -171,81 +171,103 @@ public class MediaControlsPlugin extends Plugin {
         });
     }
 
+    /** runs on the main thread (ExoPlayer rule) and always answers the page, even if something throws */
+    private void onMain(final PluginCall call, final java.util.concurrent.Callable<JSObject> body) {
+        NativePlayer.run(() -> {
+            try {
+                JSObject r = body.call();
+                if (r == null) call.resolve();
+                else call.resolve(r);
+            } catch (Exception e) {
+                call.reject(String.valueOf(e.getMessage()));
+            }
+        });
+    }
+
+    @PluginMethod
+    public void playerNext(final PluginCall call) {
+        onMain(call, () -> {
+            JSObject o = new JSObject();
+            o.put("ok", NativePlayer.next());
+            return o;
+        });
+    }
+
     @PluginMethod
     public void playerPause(final PluginCall call) {
-        NativePlayer.run(() -> {
+        onMain(call, () -> {
             NativePlayer.pause();
-            call.resolve();
+            return null;
         });
     }
 
     @PluginMethod
     public void playerResume(final PluginCall call) {
-        NativePlayer.run(() -> {
+        onMain(call, () -> {
             NativePlayer.resume();
-            call.resolve();
+            return null;
         });
     }
 
     @PluginMethod
     public void playerSeek(final PluginCall call) {
-        final long ms = call.getLong("ms", 0L);
-        NativePlayer.run(() -> {
+        final long ms = call.getDouble("ms", 0.0).longValue(); // getLong() would silently return 0 for whole numbers
+        onMain(call, () -> {
             NativePlayer.seek(ms);
-            call.resolve();
+            return null;
         });
     }
 
     @PluginMethod
     public void playerVolume(final PluginCall call) {
         final float v = call.getFloat("v", 1f);
-        NativePlayer.run(() -> {
+        onMain(call, () -> {
             NativePlayer.volume(v);
-            call.resolve();
+            return null;
         });
     }
 
     @PluginMethod
     public void playerRepeatOne(final PluginCall call) {
         final boolean on = Boolean.TRUE.equals(call.getBoolean("on", false));
-        NativePlayer.run(() -> {
+        onMain(call, () -> {
             NativePlayer.repeatOne(on);
-            call.resolve();
+            return null;
         });
     }
 
     @PluginMethod
     public void playerStop(final PluginCall call) {
-        NativePlayer.run(() -> {
+        onMain(call, () -> {
             NativePlayer.stop();
-            call.resolve();
+            return null;
         });
     }
 
     @PluginMethod
     public void playerState(final PluginCall call) {
-        NativePlayer.run(() -> call.resolve(NativePlayer.snapshot()));
+        onMain(call, NativePlayer::snapshot);
     }
 
     @PluginMethod
     public void cacheInfo(final PluginCall call) {
-        NativePlayer.run(() -> call.resolve(NativePlayer.cacheInfo(getContext())));
+        onMain(call, () -> NativePlayer.cacheInfo(getContext()));
     }
 
     @PluginMethod
     public void cacheLimit(final PluginCall call) {
         final int mb = call.getInt("mb", 100);
-        NativePlayer.run(() -> {
+        onMain(call, () -> {
             NativePlayer.setLimitMB(getContext(), mb);
-            call.resolve();
+            return null;
         });
     }
 
     @PluginMethod
     public void cacheClear(final PluginCall call) {
-        NativePlayer.run(() -> {
+        onMain(call, () -> {
             NativePlayer.clearCache(getContext());
-            call.resolve();
+            return null;
         });
     }
 

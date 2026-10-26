@@ -19,6 +19,7 @@ const DEF = {
   cacheOn: true, // Smart cache: keep played songs on the phone so replays cost no data
   cacheMB: 100,
   voiceLang: "te-IN",
+  theme: "dark", // dark | light | system
 };
 
 const read = () => {
@@ -64,6 +65,18 @@ export function SettingsProvider({ children }) {
   useEffect(() => {
     window.__hmOffline = !!s.offlineOnly;
   }, [s.offlineOnly]);
+  // dark / light / follow the phone
+  useEffect(() => {
+    const mq = window.matchMedia?.("(prefers-color-scheme: light)");
+    const apply = () => {
+      const light = s.theme === "light" || (s.theme === "system" && mq?.matches);
+      document.documentElement.dataset.theme = light ? "light" : "dark";
+      document.querySelector('meta[name="theme-color"]')?.setAttribute("content", light ? "#f4f4f6" : "#121212");
+    };
+    apply();
+    mq?.addEventListener?.("change", apply);
+    return () => mq?.removeEventListener?.("change", apply);
+  }, [s.theme]);
   const value = useMemo(() => ({ ...s, set, open, setOpen }), [s, set, open]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

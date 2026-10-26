@@ -74,14 +74,15 @@ public class ApkInstallerPlugin extends Plugin {
         new Thread(() -> {
             HttpURLConnection c = null;
             try {
-                File out = apkFile();
+                File final_ = apkFile();
+                File out = new File(final_.getPath() + ".part"); // a half-downloaded file must never be installed
                 c = (HttpURLConnection) new URL(url).openConnection();
                 c.setInstanceFollowRedirects(true);
                 c.setConnectTimeout(15000);
                 c.setReadTimeout(30000);
                 int code = c.getResponseCode();
                 if (code >= 400) throw new Exception("Download failed (HTTP " + code + ")");
-                long total = c.getContentLengthLong();
+                long total = Build.VERSION.SDK_INT >= 24 ? c.getContentLengthLong() : c.getContentLength();
                 long got = 0;
                 int last = -2;
                 try (InputStream in = c.getInputStream(); FileOutputStream fo = new FileOutputStream(out)) {
@@ -102,11 +103,18 @@ public class ApkInstallerPlugin extends Plugin {
                         }
                     }
                 }
+                if (total > 0 && got != total) throw new Exception("Download incomplete, try again");
+                if (final_.exists()) final_.delete();
+                if (!out.renameTo(final_)) throw new Exception("Could not save the update file");
                 notifyProgress(100, true);
                 JSObject r = new JSObject();
-                r.put("size", out.length());
+                r.put("size", final_.length());
                 call.resolve(r);
-            } catch (Exception e) {
+            } catch (Throwable e) {
+                try {
+                    new File(apkFile().getPath() + ".part").delete();
+                } catch (Exception ignored) {
+                }
                 notifyProgress(0, true);
                 call.reject(String.valueOf(e.getMessage()));
             } finally {

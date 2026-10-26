@@ -157,7 +157,7 @@ export default function Collection({ view }) {
 
   return (
     <div className="page">
-      <div className="page-grad tall" style={{ background: `linear-gradient(180deg, ${rgb(accent, 0.95, 0.9)} 0%, #121212 460px)` }} />
+      <div className="page-grad tall" style={{ background: `linear-gradient(180deg, ${rgb(accent, 0.95, 0.9)} 0%, var(--bg) 460px)` }} />
       <button className="ic back" onClick={nav.back} aria-label="Back">
         <Icon name="back" />
       </button>

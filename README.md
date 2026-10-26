@@ -185,3 +185,12 @@ After pushing, run GitHub Actions "Run workflow", install the new APK manually o
 - The APK version is `1.0.<GitHub run number>` (versionCode = run number). For local builds edit `client/android/version.properties`.
 - Settings shows the real app version + build ("HiMusic Android app v1.0.37 (build 37)"). The self-test prints it too, plus the native engine / notification state.
 - Phones like Vivo / Xiaomi / Oppo stop background music unless the app may ignore battery limits: Settings -> "Background playback" -> Allow (also set Battery to Unrestricted / allow auto-start in the phone settings).
+
+## Native queue (how music keeps playing with the screen off)
+
+The page sends the native player up to 20 upcoming songs at once (`POST /api/music/links` returns signed links without looking anything up; the song is looked up when the player requests the audio). A failed song is retried once, then skipped with a message. Radio songs are added to the queue ahead of time so it never runs dry.
+
+## Local music, themes
+
+- Library -> "On this device" lists the music files on the phone (Android app, asks for the music permission once) and plays them with the native player. Local songs never start online radio.
+- Settings -> Theme: Dark, Light or Auto (follows the phone).

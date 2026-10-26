@@ -53,6 +53,16 @@ export default function Library() {
           </div>
         </button>
 
+        <button className="lib-row" onClick={() => nav.push({ type: "local" })}>
+          <div className="cover local-cover" style={{ width: 56, height: 56 }}>
+            <Icon name="library" size={28} />
+          </div>
+          <div className="meta">
+            <div className="title">On this device</div>
+            <div className="sub">Music files on your phone</div>
+          </div>
+        </button>
+
         <button className="lib-row" onClick={() => nav.push({ type: "downloads" })}>
           <div className="cover dl-cover" style={{ width: 56, height: 56 }}>
             <Icon name="downloaded" size={28} />

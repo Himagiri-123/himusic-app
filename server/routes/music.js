@@ -485,6 +485,34 @@ router.get("/stream/:id", async (req, res) => {
 });
 
 
+// POST /api/music/links { songs: [{id,title,artist,duration}], q } -> signed play links WITHOUT looking the songs up.
+// The lookup happens when the player really asks for the audio, so the phone can queue a whole list at once
+// (and keep playing it with the screen off) without waiting for one slow lookup per song.
+router.post("/links", (req, res) => {
+  const q = QUALITIES.includes(req.body?.q) ? req.body.q : "normal";
+  const base = process.env.PUBLIC_URL || `${req.protocol}://${req.get("host")}`;
+  const songs = (Array.isArray(req.body?.songs) ? req.body.songs : []).slice(0, 40);
+  const links = [];
+  for (const s of songs) {
+    const id = String(s?.id || "");
+    if (!/^[\w-]{6,15}$/.test(id)) continue;
+    const a = signAudio(id, "audio", q);
+    const v = signAudio(id, "video", "normal");
+    const h = `&t=${encodeURIComponent(String(s.title || "").slice(0, 160))}&a=${encodeURIComponent(String(s.artist || "").slice(0, 100))}&d=${Math.round(Number(s.duration) || 0)}`;
+    links.push({
+      id,
+      audioUrl: `${base}/api/music/audio/${id}?k=audio&q=${q}&exp=${a.exp}&sig=${a.sig}${h}`,
+      videoUrl: `${base}/api/music/audio/${id}?k=video&q=normal&exp=${v.exp}&sig=${v.sig}${h}`,
+    });
+  }
+  // start looking up the first songs right away so they are ready when the player asks
+  if (ytdlpEnabled() && !ytdlpDown())
+    songs.slice(0, 3).forEach((s) => {
+      if (s?.title && /^[\w-]{6,15}$/.test(String(s.id))) resolveAudio(s.id, q, "audio", { hint: { title: String(s.title).slice(0, 160), artist: String(s.artist || "").slice(0, 100), duration: Number(s.duration) || 0 } }).catch(() => {});
+    });
+  res.json({ links });
+});
+
 // Signed audio proxy: the <audio> tag requests this, we fetch the real file (with Range) and pipe it back.
 router.get("/audio/:id", async (req, res) => {
   const { id } = req.params;
@@ -492,7 +520,8 @@ router.get("/audio/:id", async (req, res) => {
   const q = QUALITIES.includes(req.query.q) ? req.query.q : "normal";
   if (!/^[\w-]{6,15}$/.test(id) || !verifyAudio(id, kind, q, req.query.exp, req.query.sig)) return res.status(403).end();
   try {
-    const info = await resolveAudio(id, q, kind);
+    const hint = req.query.t ? { title: String(req.query.t).slice(0, 160), artist: String(req.query.a || "").slice(0, 100), duration: Number(req.query.d) || 0 } : null;
+    const info = await resolveAudio(id, q, kind, { hint });
     const headers = { "User-Agent": UA };
     // Range requests are capped per response. The default (8 MB) is a whole song, so the phone buffers it fully
     // and keeps playing in the background / with the screen off even if the network is throttled.
@@ -510,7 +539,7 @@ router.get("/audio/:id", async (req, res) => {
       // link went bad (expired / moved): look the song up again once and retry
       dropAudio(id, q, kind);
       try {
-        const fresh = await resolveAudio(id, q, kind);
+        const fresh = await resolveAudio(id, q, kind, { hint });
         up = await fetch(fresh.url, { headers });
       } catch {}
       if (!up.ok && up.status !== 206) return res.status(502).end();

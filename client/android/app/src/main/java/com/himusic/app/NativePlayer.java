@@ -66,6 +66,7 @@ public final class NativePlayer {
     private static final Map<String, JSONObject> tracks = new HashMap<>();
     private static String currentKey = "";
     private static boolean tickerOn = false;
+    private static final Map<String, Integer> retries = new HashMap<>();
 
     public static void run(Runnable r) {
         if (Looper.myLooper() == Looper.getMainLooper()) r.run();
@@ -91,15 +92,17 @@ public final class NativePlayer {
         DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
                 .setUserAgent(UA)
                 .setAllowCrossProtocolRedirects(true)
-                .setConnectTimeoutMs(15000)
-                .setReadTimeoutMs(20000);
-        androidx.media3.datasource.DataSource.Factory source = http;
+                .setConnectTimeoutMs(30000)
+                .setReadTimeoutMs(45000); // the first request for a song can take a while (the server looks the song up)
+        androidx.media3.datasource.DataSource.Factory webSource = http;
         if (cache != null) {
-            source = new CacheDataSource.Factory()
+            webSource = new CacheDataSource.Factory()
                     .setCache(cache)
                     .setUpstreamDataSourceFactory(http)
                     .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR);
         }
+        // web songs go through the cache; music files on the phone (content:// / file://) are read directly
+        androidx.media3.datasource.DataSource.Factory source = new androidx.media3.datasource.DefaultDataSource.Factory(app, webSource);
         player = new ExoPlayer.Builder(app)
                 .setMediaSourceFactory(new DefaultMediaSourceFactory(source))
                 // buffer up to 4 minutes ahead: a whole song is on the phone, so a slow network does not stall it
@@ -111,6 +114,10 @@ public final class NativePlayer {
         player.addListener(new Player.Listener() {
             @Override
             public void onIsPlayingChanged(boolean isPlaying) {
+                if (isPlaying) {
+                    MediaItem c = player.getCurrentMediaItem();
+                    if (c != null) retries.remove(c.mediaId); // it plays: a later failure starts counting again
+                }
                 stateChanged();
                 if (isPlaying) startTicker();
             }
@@ -129,7 +136,8 @@ public final class NativePlayer {
                     o.put("id", item.mediaId);
                     send("advanced", o);
                 }
-                currentKey = keyOf(item.mediaId);
+                currentKey = item.localConfiguration != null && item.localConfiguration.customCacheKey != null
+                        ? item.localConfiguration.customCacheKey : keyOf(item.mediaId);
                 pushNotification();
                 trimLater();
             }
@@ -141,8 +149,28 @@ public final class NativePlayer {
                 o.put("code", error.errorCode);
                 o.put("message", String.valueOf(error.getMessage()));
                 MediaItem cur = player.getCurrentMediaItem();
-                o.put("id", cur == null ? "" : cur.mediaId);
-                send("error", o);
+                final String id = cur == null ? "" : cur.mediaId;
+                o.put("id", id);
+                JSONObject t = tracks.get(id);
+                o.put("title", t == null ? "" : t.optString("title"));
+                // 1st failure: try the same song once more (a sleeping server often answers on the 2nd try);
+                // 2nd failure: skip to the next song instead of stopping the music
+                int tries = retries.containsKey(id) ? retries.get(id) : 0;
+                retries.put(id, tries + 1);
+                if (tries < 1) {
+                    MAIN.postDelayed(() -> {
+                        if (player != null && player.getCurrentMediaItem() != null && player.getCurrentMediaItem().mediaId.equals(id)) {
+                            player.prepare(); // playWhenReady is kept, so a pause during the wait is respected
+                        }
+                    }, 1500);
+                } else if (player.hasNextMediaItem()) {
+                    send("skip", o);
+                    player.seekToNextMediaItem();
+                    player.prepare();
+                    player.play();
+                } else {
+                    send("error", o);
+                }
             }
         });
     }
@@ -167,6 +195,7 @@ public final class NativePlayer {
     private static MediaItem item(JSONObject t) {
         String id = t.optString("id");
         tracks.put(id, t);
+        retries.remove(id); // a song queued again starts with a fresh retry count
         return new MediaItem.Builder()
                 .setMediaId(id)
                 .setUri(t.optString("url"))
@@ -184,6 +213,7 @@ public final class NativePlayer {
         }
         if (items.isEmpty()) return;
         active = true;
+        retries.clear();
         currentKey = keyOf(items.get(0).mediaId);
         player.setMediaItems(items, 0, Math.max(0, startMs));
         player.setPlayWhenReady(true);
@@ -207,6 +237,15 @@ public final class NativePlayer {
         if (!items.isEmpty()) player.addMediaItems(items);
     }
 
+    /** next song of the native queue; false if there is none (the page then decides what comes next) */
+    public static boolean next() {
+        if (player == null || !player.hasNextMediaItem()) return false;
+        player.seekToNextMediaItem();
+        if (player.getPlaybackState() == Player.STATE_IDLE) player.prepare(); // after an error the player is idle
+        player.play();
+        return true;
+    }
+
     public static void pause() {
         if (player != null) player.pause();
     }
@@ -214,6 +253,7 @@ public final class NativePlayer {
     public static void resume() {
         if (player == null) return;
         if (player.getPlaybackState() == Player.STATE_ENDED) player.seekTo(0);
+        if (player.getPlaybackState() == Player.STATE_IDLE) player.prepare();
         player.play();
     }
 
@@ -259,6 +299,8 @@ public final class NativePlayer {
             case "next":
                 if (player.hasNextMediaItem()) {
                     player.seekToNextMediaItem();
+                    if (player.getPlaybackState() == Player.STATE_IDLE) player.prepare();
+                    player.play();
                     return true;
                 }
                 return false;

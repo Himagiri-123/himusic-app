@@ -102,6 +102,10 @@ export default function Settings() {
           <button className="ic" onClick={close} aria-label="Close"><Icon name="close" size={22} /></button>
         </div>
         <div className="sheet-scroll big">
+          <Row title="Theme" hint="Dark, Light, or follow your phone.">
+            <Seg value={s.theme} onChange={(v) => s.set({ theme: v })} options={[["dark", "Dark"], ["light", "Light"], ["system", "Auto"]]} />
+          </Row>
+
           <Row
             title="Streaming quality"
             hint={

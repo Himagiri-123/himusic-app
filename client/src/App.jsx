@@ -16,6 +16,7 @@ import Home from "./components/Home.jsx";
 import Search from "./components/Search.jsx";
 import Library from "./components/Library.jsx";
 import Collection from "./components/Collection.jsx";
+import LocalMusic from "./components/LocalMusic.jsx";
 import Player from "./components/Player.jsx";
 import SongMenu from "./components/SongMenu.jsx";
 import PlaylistPicker from "./components/PlaylistPicker.jsx";
@@ -127,7 +128,8 @@ function Main() {
             <div className={show("library")}>
               <Library />
             </div>
-            {view && <Collection key={stack.length + ":" + (view.id || view.artist?.id || view.type)} view={view} />}
+            {view && view.type === "local" && <LocalMusic key={"local" + stack.length} />}
+            {view && view.type !== "local" && <Collection key={stack.length + ":" + (view.id || view.artist?.id || view.type)} view={view} />}
           </main>
 
           <Player />

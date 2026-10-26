@@ -11,6 +11,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(MediaControlsPlugin.class);
         registerPlugin(ApkInstallerPlugin.class);
+        registerPlugin(LocalMusicPlugin.class);
         super.onCreate(savedInstanceState);
         WebView wv = getBridge().getWebView();
         if (wv != null) {

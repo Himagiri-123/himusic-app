@@ -131,6 +131,7 @@ export default function Player() {
   const { isLiked, toggleLike, setMenu } = useApp();
   const dl = useDownloads();
   const [sleepOpen, setSleepOpen] = useState(false);
+  const scrubTimer = useRef(null);
   const [scrub, setScrub] = useState(null); // slider position while the finger is down; the seek happens on release
   const sleepLeft = useSleepLeft();
   const { current } = p;
@@ -147,6 +148,7 @@ export default function Player() {
   const pct = p.time.dur ? Math.min(100, (shown / p.time.dur) * 100) : 0;
   const commitScrub = () => {
     if (scrub == null) return;
+    clearTimeout(scrubTimer.current);
     p.seek(scrub);
     setScrub(null);
   };
@@ -193,7 +195,7 @@ export default function Player() {
   return (
     <div
       className="full"
-      style={{ background: `linear-gradient(180deg, ${rgb(col, 0.95, 1)} 0%, ${rgb(col, 0.5, 1)} 42%, #121212 95%)` }}
+      style={{ background: `linear-gradient(180deg, ${rgb(col, 0.95, 1)} 0%, ${rgb(col, 0.5, 1)} 42%, var(--bg) 95%)` }}
     >
       <div className="full-in">
         <div className="full-top">
@@ -237,8 +239,18 @@ export default function Player() {
             max={p.time.dur || 0}
             step="1"
             value={Math.min(scrub ?? (p.time.cur || 0), p.time.dur || 0)}
-            onChange={(e) => setScrub(Number(e.target.value))}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              setScrub(v);
+              // some phones never send the 'finger lifted' event for sliders: seek shortly after the last move
+              clearTimeout(scrubTimer.current);
+              scrubTimer.current = setTimeout(() => {
+                p.seek(v);
+                setScrub(null);
+              }, 450);
+            }}
             onPointerUp={commitScrub}
+            onPointerCancel={commitScrub}
             onTouchEnd={commitScrub}
             onKeyUp={commitScrub}
             onBlur={commitScrub}

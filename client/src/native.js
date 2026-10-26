@@ -5,6 +5,9 @@ export const isNative = Capacitor.isNativePlatform();
 const MC = isNative ? registerPlugin("MediaControls") : null;
 const AppPlugin = isNative ? registerPlugin("App") : null;
 export const Installer = isNative ? registerPlugin("ApkInstaller") : null;
+const LocalPlugin = isNative ? registerPlugin("LocalMusic") : null;
+// music files stored on the phone (asks for permission the first time)
+export const scanLocalMusic = () => (LocalPlugin ? LocalPlugin.scan() : Promise.reject(new Error("Local music works in the Android app")));
 
 export const nativeMedia = {
   // show / update the notification + lock-screen controls (title, artist, artwork, play state, position)
@@ -26,12 +29,13 @@ export const nativeStatus = () => (MC ? MC.status().catch((e) => ({ error: Strin
 
 // The Android app plays music with its own native engine (ExoPlayer), outside the WebView.
 // On the website, or in an older APK without the engine, available() is false and the normal player is used.
-const EVENTS = ["state", "time", "advanced", "ended", "error"];
+const EVENTS = ["state", "time", "advanced", "ended", "error", "skip"];
 export const nativePlayer = isNative
   ? {
       available: () => MC.playerPing().then((r) => !!r?.ok).catch(() => false),
       play: (tracks, startMs = 0) => MC.playerPlay({ tracks, startMs }),
       upcoming: (afterId, tracks) => MC.playerUpcoming({ afterId, tracks }).catch(() => {}),
+      next: () => MC.playerNext().then((r) => !!r?.ok).catch(() => false),
       pause: () => MC.playerPause().catch(() => {}),
       resume: () => MC.playerResume().catch(() => {}),
       seek: (ms) => MC.playerSeek({ ms }).catch(() => {}),

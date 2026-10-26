@@ -40,6 +40,8 @@ public class MediaService extends Service {
     public static volatile boolean playing = false;
     public static volatile String lastError = ""; // why the foreground notification could not start (shown in the self-test)
 
+    private volatile boolean isForeground = false;
+    private final android.os.Handler main = new android.os.Handler(android.os.Looper.getMainLooper());
     private MediaSessionCompat session;
     private PowerManager.WakeLock wakeLock;
     private String title = "", artist = "", artworkUrl = "";
@@ -125,11 +127,17 @@ public class MediaService extends Service {
             } else {
                 startForeground(NOTIF_ID, n);
             }
+            isForeground = true;
             lastError = "";
         } catch (Exception e) {
             lastError = String.valueOf(e);
-            // not allowed to run as foreground right now; keep a plain notification
+            // not allowed to run as foreground right now: show a plain notification. A service that was started as
+            // foreground and never became one is killed (with the whole app) by Android, so stop it instead.
             ((NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE)).notify(NOTIF_ID, n);
+            if (!isForeground) {
+                running = false;
+                stopSelf();
+            }
         }
         // NOTE: the service stays in the foreground while paused. Dropping it and re-entering foreground later
         // (e.g. after a short buffering pause with the screen off) is forbidden by Android 12+ and kills the music.
@@ -178,10 +186,15 @@ public class MediaService extends Service {
                 InputStream in = c.getInputStream();
                 Bitmap bmp = BitmapFactory.decodeStream(in);
                 in.close();
-                if (bmp != null && url.equals(artworkUrl)) {
-                    artwork = bmp;
-                    loadedArtwork = url;
-                    render(); // refresh notification with the cover
+                if (bmp != null) {
+                    final Bitmap b = bmp;
+                    main.post(() -> {
+                        if (running && url.equals(artworkUrl)) {
+                            artwork = b;
+                            loadedArtwork = url;
+                            render(); // refresh notification with the cover
+                        }
+                    });
                 }
             } catch (Exception ignored) {
             }

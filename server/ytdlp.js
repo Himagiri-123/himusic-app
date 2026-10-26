@@ -244,7 +244,7 @@ function scoreCandidate(c, want) {
   if (VAR.test(c.title) && !VAR.test(want.title)) score -= 0.3; // a remix / cover is not the song the app shows
   return score;
 }
-const MIN_SCORE = 0.55;
+const MIN_SCORE = 0.6;
 
 async function collect(tasks, want) {
   const all = [];

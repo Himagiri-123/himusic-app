@@ -94,6 +94,7 @@ export function PlayerProvider({ children }) {
   const nativeActive = useRef(false); // the current song is playing in the native engine
   const nativeId = useRef(null); // id of the track the native engine is on
   const nativePos = useRef(0);
+  const healAt = useRef(0); // until this time a different song id from the native engine is not treated as 'moved on'
   const seekHold = useRef({ until: 0, to: 0 }); // ignore stale position ticks right after a seek
   const nativeFailedAt = useRef(0);
   const lastNativeErr = useRef("");
@@ -320,11 +321,18 @@ export function PlayerProvider({ children }) {
   // radio mode: when the playlist is over, find similar songs (same artist / mood) and keep going
   const fillRadio = async () => {
     const cur = currentRef.current;
-    if (!cur || radioFor.current === cur.id) return;
+    if (!cur || cur.uri || radioFor.current === cur.id) return; // songs from the phone do not start online radio
     radioFor.current = cur.id;
     try {
       const r = await api.related(cur, [...playedIds.current]);
-      const more = (r.results || []).filter((x) => x.id && !playedIds.current.has(x.id));
+      let more = (r.results || []).filter((x) => x.id && !playedIds.current.has(x.id));
+      if (more.length < 6) {
+        // heard almost everything similar: look again, only avoiding the last songs, so the radio never runs dry
+        const r2 = await api.related(cur, [...playedIds.current].slice(-12));
+        const extra = (r2.results || []).filter((x) => x.id && x.id !== cur.id && !more.some((m) => m.id === x.id));
+        more = [...more, ...extra];
+        if (more.length) more.forEach((x) => playedIds.current.delete(x.id)); // allow songs that were heard long ago again
+      }
       if (more.length) relatedRef.current = more;
     } catch {}
   };
@@ -432,12 +440,13 @@ export function PlayerProvider({ children }) {
     id: song.id,
     title: song.title || "",
     artist: song.artist || "",
-    artwork: song.id ? `https://i.ytimg.com/vi/${song.id}/hqdefault.jpg` : song.thumbnail || "",
-    url: withNocap(s.audioUrl),
-    q: quality(),
+    artwork: song.uri ? "" : song.id ? `https://i.ytimg.com/vi/${song.id}/hqdefault.jpg` : song.thumbnail || "",
+    url: song.uri ? song.uri : withNocap(s.audioUrl), // a music file on the phone is played as it is
+    q: song.uri ? "" : quality(),
     duration: song.duration || 0,
   });
   const startNative = async (song, s, resumeAt) => {
+    healAt.current = Date.now() + 15000; // while switching songs, events of the old song must not pull the screen back
     leaveWeb();
     try {
       ytRef.current?.stopVideo?.();
@@ -447,13 +456,15 @@ export function PlayerProvider({ children }) {
     nativePos.current = resumeAt || 0;
     await nativePlayer.repeatOne(repeatRef.current === "one");
     await nativePlayer.play([mkTrack(song, s)], Math.round((resumeAt || 0) * 1000));
+    healAt.current = 0;
     engineRef.current = "direct";
     setEngine("direct");
     setPlaying(true);
     setLoading(false);
     syncSoon();
   };
-  // next songs for the native queue, so it moves on by itself even with the screen off
+  // next songs for the native queue, so it keeps going by itself even with the screen off (about 70 minutes ahead)
+  const NATIVE_AHEAD = 20;
   const peekList = (n) => {
     const cur = currentRef.current;
     if (!cur || repeatRef.current === "one" || sleepRef.current?.mode === "song") return [];
@@ -467,37 +478,39 @@ export function PlayerProvider({ children }) {
     };
     userQ.current.forEach(add);
     ctxQ.current.forEach(add);
-    if (!out.length && repeatRef.current === "all") contextRef.current.forEach(add);
-    if (!out.length && stRef.current.autoplay && !stRef.current.offlineOnly)
-      relatedRef.current.filter((r) => !playedIds.current.has(r.id)).forEach(add);
+    if (repeatRef.current === "all") contextRef.current.forEach(add);
+    else if (stRef.current.autoplay && !stRef.current.offlineOnly && !cur.uri) relatedRef.current.filter((r) => !playedIds.current.has(r.id)).forEach(add);
     return out;
   };
   const syncNative = async () => {
     const cur = currentRef.current;
     if (!nativeActive.current || !cur || nativeId.current !== cur.id) return;
     const seq = ++syncSeq.current;
-    let cands = peekList(2);
-    if (!cands.length && repeatRef.current !== "one" && sleepRef.current?.mode !== "song" && stRef.current.autoplay && !stRef.current.offlineOnly) {
-      await fillRadio();
+    const wantMore = repeatRef.current !== "one" && sleepRef.current?.mode !== "song" && stRef.current.autoplay && !stRef.current.offlineOnly && !cur.uri;
+    if (wantMore && userQ.current.length + ctxQ.current.length < 12 && peekList(NATIVE_AHEAD).length < 12) {
+      await fillRadio(); // same language / mood as the song that is playing
       if (seq !== syncSeq.current) return;
-      cands = peekList(2);
     }
+    let cands = peekList(NATIVE_AHEAD);
+    // saved (offline) songs play through the web player, so the native queue stops before the first one
+    const saved = new Set(dlSongsRef.current.map((x) => x.id));
+    const cut = cands.findIndex((x) => saved.has(x.id));
+    if (cut >= 0) cands = cands.slice(0, cut);
     const tracks = [];
-    if (!stRef.current.offlineOnly) {
-      const res = await Promise.all(
-        cands.map(async (song) => {
-          try {
-            if (await getLocalRef.current?.(song.id)) return null; // saved songs play through the web player
-            return mkTrack(song, await api.stream(song.id, quality(), song));
-          } catch {
-            return null;
-          }
-        })
-      );
-      for (const t of res) {
-        if (!t) break;
-        tracks.push(t);
+    const online = cands.filter((x) => !x.uri);
+    let byId = new Map();
+    if (online.length && !stRef.current.offlineOnly) {
+      try {
+        const r = await api.links(online, quality());
+        byId = new Map((r.links || []).map((l) => [l.id, l]));
+      } catch {
+        return; // keep the queue the native engine already has
       }
+    }
+    for (const x of cands) {
+      if (x.uri) tracks.push(mkTrack(x, {}));
+      else if (byId.has(x.id)) tracks.push(mkTrack(x, byId.get(x.id)));
+      else break;
     }
     if (seq !== syncSeq.current || !nativeActive.current || nativeId.current !== cur.id || currentRef.current?.id !== cur.id) return;
     nativePlayer.upcoming(cur.id, tracks);
@@ -522,12 +535,18 @@ export function PlayerProvider({ children }) {
     return null;
   };
   // the native engine moved on to the next song by itself
-  const onNativeAdvance = (id) => {
+  const onNativeAdvance = async (id) => {
     const cur = currentRef.current;
     if (!id || cur?.id === id) return;
-    const song = takeById(id);
-    if (!song) return;
-    if (listened.current >= 30 && cur) {
+    let song = takeById(id);
+    if (!song) {
+      // not in the page's lists (e.g. the page was reloaded): take the name from the native engine so the screen never shows another song
+      const d = await nativePlayer.state();
+      if (!d || d.id !== id) return;
+      song = { id, title: d.title || "", artist: d.artist || "", thumbnail: d.artwork || "", duration: d.duration || 0 };
+    }
+    if (currentRef.current?.id === id) return;
+    if (listened.current >= 30 && cur && !cur.uri) {
       api.playStat({ id: cur.id, title: cur.title, artist: cur.artist, thumbnail: cur.thumbnail }, Math.round(listened.current)).catch(() => {});
     }
     listened.current = 0;
@@ -541,19 +560,27 @@ export function PlayerProvider({ children }) {
     setTime({ cur: 0, dur: song.duration || 0 });
     setError("");
     errCount.current = 0;
-    addHistory(song);
+    if (!song.uri) addHistory(song);
     syncQueue();
   };
   nativeEvRef.current = {
     state: (d) => {
-      if (!nativeActive.current || (d.id && d.id !== currentRef.current?.id)) return;
+      if (!nativeActive.current) return;
+      if (d.id && d.id !== currentRef.current?.id) {
+        if (Date.now() > healAt.current) onNativeAdvance(d.id); // screen and sound disagree: follow the sound
+        return;
+      }
       setPlaying(!!d.playing || (!!d.wantsPlay && !!d.buffering));
       setLoading(!!d.buffering && !!d.wantsPlay);
       if (d.duration) setTime((t) => ({ ...t, dur: d.duration }));
       if (d.playing) setError("");
     },
     time: (d) => {
-      if (!nativeActive.current || (d.id && d.id !== currentRef.current?.id)) return;
+      if (!nativeActive.current) return;
+      if (d.id && d.id !== currentRef.current?.id) {
+        if (Date.now() > healAt.current) onNativeAdvance(d.id);
+        return;
+      }
       const h = seekHold.current;
       if (Date.now() < h.until && Math.abs((d.position || 0) - h.to) > 2.5) return; // old tick from before the seek
       nativePos.current = d.position || 0;
@@ -575,15 +602,26 @@ export function PlayerProvider({ children }) {
         setPlaying(false);
         return;
       }
-      nativeActive.current = false;
-      nativeId.current = null;
+      leaveNative();
       nextRef.current?.();
+    },
+    skip: (d) => {
+      // a song could not be played even after a retry: the native engine moved on, tell the user
+      const m = `"${d.title || "A song"}" could not be played, skipped to the next one.`;
+      showToast?.(m);
     },
     error: (d) => {
       if (!nativeActive.current || (d.id && d.id !== currentRef.current?.id)) return;
       // the native engine could not play this song: continue with the web player
-      nativeFailedAt.current = Date.now();
       lastNativeErr.current = `${d.code ?? ""} ${d.message || ""}`.trim();
+      if (currentRef.current?.uri) {
+        // a file on the phone that cannot be played (moved / deleted): say so, do not retry in a loop
+        leaveNative();
+        setPlaying(false);
+        failMsg("could not be played (the file may have been moved or deleted)");
+        return;
+      }
+      nativeFailedAt.current = Date.now();
       leaveNative();
       if (currentRef.current) loadRef.current?.(currentRef.current, nativePos.current);
     },
@@ -600,6 +638,7 @@ export function PlayerProvider({ children }) {
         advanced: (d) => nativeEvRef.current.advanced(d),
         ended: (d) => nativeEvRef.current.ended(d),
         error: (d) => nativeEvRef.current.error(d),
+        skip: (d) => nativeEvRef.current.skip(d),
       });
       // the page was reloaded while the native engine kept playing: pick the song up again instead of stopping it
       nativePlayer.state().then((d) => {
@@ -640,7 +679,7 @@ export function PlayerProvider({ children }) {
   const load = useCallback(
     async (song, resumeAt = 0, opts = {}) => {
       resumeRef.current = null;
-      if (listened.current >= 30 && currentRef.current && currentRef.current.id !== song.id) {
+      if (listened.current >= 30 && currentRef.current && !currentRef.current.uri && currentRef.current.id !== song.id) {
         const c = currentRef.current;
         api.playStat({ id: c.id, title: c.title, artist: c.artist, thumbnail: c.thumbnail }, Math.round(listened.current)).catch(() => {});
       }
@@ -650,6 +689,7 @@ export function PlayerProvider({ children }) {
       const token = ++loadToken.current;
       if (nativePlayer) await nativeProbe;
       if (token !== loadToken.current) return;
+      if (nativeActive.current) healAt.current = Date.now() + 20000; // the native engine still plays the old song for a moment
       setCurrent(song);
       currentRef.current = song;
       setLoading(true);
@@ -657,6 +697,31 @@ export function PlayerProvider({ children }) {
       setTime({ cur: resumeAt, dur: song.duration || 0 });
       playedIds.current.add(song.id);
       preloadTried.current = false;
+
+      // music file stored on the phone: only the native engine can play it
+      if (song.uri) {
+        streamRef.current = null;
+        relatedRef.current = [];
+        setHasVideo(false);
+        if (!NATIVE_OK) {
+          setPlaying(false);
+          setLoading(false);
+          failMsg("is stored on the phone and can only be played in the Android app");
+          return;
+        }
+        try {
+          await startNative(song, {}, resumeAt);
+          if (token !== loadToken.current) return;
+          curSource.current = "native";
+        } catch (e) {
+          if (token !== loadToken.current) return;
+          leaveNative();
+          setPlaying(false);
+          setLoading(false);
+          failMsg("could not be played");
+        }
+        return;
+      }
 
       // the next song is still downloading in the background: wait a moment instead of fetching it twice
       if (!opts._retry && preloadWait.current?.id === song.id && resumeAt === 0) {
@@ -769,6 +834,35 @@ export function PlayerProvider({ children }) {
         } catch {}
       }
 
+      // Android app: the native engine plays it (needs no lookup first: the link is signed by the server and the
+      // audio is looked up when the player asks for it)
+      if (canNative()) {
+        let link = null;
+        try {
+          link = (await api.links([song], quality())).links?.[0] || null;
+        } catch {}
+        if (token !== loadToken.current) return;
+        if (link) {
+          const s = { audioUrl: link.audioUrl, videoUrl: link.videoUrl, related: [] };
+          streamRef.current = s;
+          relatedRef.current = [];
+          setHasVideo(!!link.videoUrl);
+          try {
+            await startNative(song, s, resumeAt);
+            if (token !== loadToken.current) return;
+            curSource.current = "native";
+            addHistory(song);
+            batteryHint();
+            return;
+          } catch (e) {
+            nativeFailedAt.current = Date.now();
+            lastNativeErr.current = String(e?.message || e);
+            leaveNative();
+            if (token !== loadToken.current) return;
+          }
+        }
+      }
+
       const skipDirect = prefRef.current === "embed" || Date.now() - directFailedAt.current < 10 * 60 * 1000;
 
       if (!skipDirect) {
@@ -849,7 +943,7 @@ export function PlayerProvider({ children }) {
     if (!song && !stRef.current.autoplay) return null;
     if (!song) song = relatedRef.current.find((r) => r.id && !playedIds.current.has(r.id));
     const cur = currentRef.current;
-    if (!song && cur) {
+    if (!song && cur && !cur.uri) {
       await fillRadio();
       song = relatedRef.current.find((r) => r.id && !playedIds.current.has(r.id));
       if (!song) {
@@ -863,6 +957,7 @@ export function PlayerProvider({ children }) {
   };
 
   const next = useCallback(async (opts) => {
+    if (nativeActive.current && !opts?.fade && (await nativePlayer.next())) return; // native queue moves on, 'advanced' updates the page
     const cur = currentRef.current;
     if (cur) prevRef.current.push(cur);
     const song = await popNext();
