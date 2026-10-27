@@ -380,6 +380,7 @@ export function onlySingles(results, query = "") {
     const d = Number(r.duration) || 0;
     if (d > MAX_SINGLE_SECONDS) return false;
     if (MIX_WORDS.test(r.title || "")) return false;
+    if (/\b(whatsapp status|status video|reels?|shorts?|edit)\b/i.test(r.title || "")) return false; // fan edits, not the song
     return true;
   });
 }

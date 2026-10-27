@@ -113,14 +113,14 @@ function buildSearchQueries(meta) {
   if (!meta || !meta.title) return [];
   const cleaned = meta.title
     .replace(/\([^)]*\)|\[[^\]]*\]|\{[^}]*\}/g, " ")
-    .replace(/\b(official|full|video|audio|lyrical|lyrics|song|hd|4k|8k|hq|mv|teaser|trailer|jukebox|with lyrics)\b/gi, " ")
+    .replace(/\b(official|full|video|audio|lyrical|lyrics|lyric|song|hd|4k|8k|hq|mv|teaser|trailer|jukebox|with lyrics|movie|youtube|new)\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
-  const parts = cleaned.split(/[|\-–—:/]+/).map((s) => s.trim()).filter((s) => s.length > 2);
+  const parts = cleaned.split(/[|\-–—:/~]+/).map((s) => s.trim()).filter((s) => s.length > 2);
   const queries = [];
   if (parts.length >= 2) queries.push(`${parts[0]} ${parts[1]}`);
   if (parts.length >= 1) queries.push(parts[0]);
-  const shortWords = cleaned.split(" ").slice(0, 5).join(" ").trim();
+  const shortWords = cleaned.replace(/[|:~\-–—/]+/g, " ").replace(/\s+/g, " ").trim().split(" ").slice(0, 5).join(" ");
   if (shortWords && !queries.includes(shortWords)) queries.push(shortWords);
   if (meta.author && parts[0]) queries.push(`${parts[0]} ${meta.author}`);
   return queries.length ? queries : [meta.title];
@@ -244,7 +244,12 @@ function scoreCandidate(c, want) {
   const candCore = toks(String(c.title).replace(/\([^)]*\)|\[[^\]]*\]/g, " "));
   const candAll = toks(`${c.title} ${c.artist} ${c.album}`);
   const wantCoreAll = toks(want.title);
-  const wantHead = toks(String(want.title).split(/[|\-–—:/]+/)[0].replace(/\([^)]*\)|\[[^\]]*\]/g, " "));
+  const wantHead =
+    String(want.title)
+      .replace(/\([^)]*\)|\[[^\]]*\]/g, " ")
+      .split(/[|\-–—:/~]+/)
+      .map((x) => toks(x))
+      .find((x) => x.length) || [];
   const wantAll = toks(`${want.title} ${want.artist}`);
   if (!candCore.length) return 0;
   const cover = coverage(candCore, wantAll); // does the YouTube title contain this song's name?
@@ -255,7 +260,8 @@ function scoreCandidate(c, want) {
   if (want.duration > 0 && c.duration > 0) {
     const diff = Math.abs(want.duration - c.duration);
     if (diff <= 6) score += 0.15;
-    else if (diff > 30) score -= 0.35;
+    else if (diff > 90) score -= 0.35;
+    else if (diff > 45) score -= 0.15;
   }
   if (c.duration > 900) score -= 0.5; // compilations
   const VAR = /\b(remix|mashup|cover|instrumental|karaoke|slowed|reverb|8d|lofi|lo-fi|unplugged|version)\b/i;
@@ -295,6 +301,9 @@ async function collect(tasks, want) {
 // accept a confident title match, or a weaker one whose length agrees with the song to within 8 s
 function acceptable(c, want, s) {
   if (s >= MIN_SCORE) return true;
+  // the song's whole name appears in the title shown by the app, and nothing else says it is a different version
+  const core = toks(String(c.title).replace(/\([^)]*\)|\[[^\]]*\]/g, " "));
+  if (core.length && s >= 0.45 && !/\b(remix|mashup|cover|instrumental|karaoke|slowed|reverb|8d|lofi|unplugged)\b/i.test(c.title) && coverage(core, toks(`${want.title} ${want.artist}`)) >= 0.99 && !(Number(c.duration) > 600)) return true;
   const d = Number(c.duration) || 0;
   return s >= 0.35 && want.duration > 0 && d > 0 && Math.abs(d - want.duration) <= 8;
 }
