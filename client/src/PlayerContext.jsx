@@ -538,7 +538,8 @@ export function PlayerProvider({ children }) {
   const onNativeAdvance = async (id) => {
     const cur = currentRef.current;
     if (!id || cur?.id === id) return;
-    let song = takeById(id);
+    const wentBack = prevRef.current.length > 0 && prevRef.current[prevRef.current.length - 1].id === id;
+    let song = wentBack ? prevRef.current[prevRef.current.length - 1] : takeById(id);
     if (!song) {
       // not in the page's lists (e.g. the page was reloaded): take the name from the native engine so the screen never shows another song
       const d = await nativePlayer.state();
@@ -550,7 +551,11 @@ export function PlayerProvider({ children }) {
       api.playStat({ id: cur.id, title: cur.title, artist: cur.artist, thumbnail: cur.thumbnail }, Math.round(listened.current)).catch(() => {});
     }
     listened.current = 0;
-    if (cur) prevRef.current.push(cur);
+    if (wentBack) {
+      // the native engine stepped back (notification / lock screen Previous): keep history and queue consistent
+      prevRef.current.pop();
+      if (cur) ctxQ.current.unshift(cur);
+    } else if (cur) prevRef.current.push(cur);
     nativeId.current = id;
     nativePos.current = 0;
     playedIds.current.add(id);

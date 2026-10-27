@@ -1,4 +1,6 @@
 import "dotenv/config";
+import Resolved from "./models/Resolved.js";
+import { setResolveStore } from "./ytdlp.js";
 import express from "express";
 import cors from "cors";
 import mongoose from "mongoose";
@@ -75,6 +77,11 @@ async function start() {
 
   await mongoose.connect(process.env.MONGO_URI);
   console.log("MongoDB connected");
+  setResolveStore({
+    get: async (key) => (await Resolved.findOne({ key }).lean())?.data || null,
+    set: (key, data) => Resolved.updateOne({ key }, { data, expiresAt: new Date(Date.now() + 12 * 3600 * 1000) }, { upsert: true }),
+    del: (key) => Resolved.deleteOne({ key }),
+  });
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, () => console.log(`API on :${PORT}`));
 }

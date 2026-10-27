@@ -229,6 +229,7 @@ public final class NativePlayer {
         int idx = player.getCurrentMediaItemIndex();
         int count = player.getMediaItemCount();
         if (count > idx + 1) player.removeMediaItems(idx + 1, count);
+        if (idx > 10) player.removeMediaItems(0, idx - 10); // keep only the last 10 played songs for Previous
         List<MediaItem> items = new ArrayList<>();
         for (int i = 0; i < list.length(); i++) {
             JSONObject t = list.optJSONObject(i);
@@ -307,6 +308,12 @@ public final class NativePlayer {
             case "previous":
                 if (player.getCurrentPosition() > 4000) {
                     player.seekTo(0);
+                    return true;
+                }
+                if (player.hasPreviousMediaItem()) {
+                    player.seekToPreviousMediaItem();
+                    if (player.getPlaybackState() == Player.STATE_IDLE) player.prepare();
+                    player.play();
                     return true;
                 }
                 return false;

@@ -55,10 +55,11 @@ export default function Home() {
   };
 
   useEffect(() => {
-    if (!libLoaded || fetched.current || settings.offlineOnly) return;
+    // Don't wait for the library fetch (slow on a cold server): start now with the cached library.
+    if (fetched.current || settings.offlineOnly) return;
     fetched.current = true;
     load();
-  }, [libLoaded, settings.offlineOnly]); // eslint-disable-line
+  }, [settings.offlineOnly]); // eslint-disable-line
 
   useEffect(() => {
     if (online && failed) load();

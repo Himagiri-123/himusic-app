@@ -139,9 +139,18 @@ const dec = (t = "") =>
 // every search source returns candidates: { title, artist, duration, url, alts, ... } so the best MATCH can be chosen,
 // not simply the first hit (the first hit is often a remix / another song with a similar name)
 async function searchSaavnWrapper(baseUrl, query, q) {
+  if (srcDown(baseUrl)) return [];
+  try {
+    return await searchSaavnWrapperRaw(baseUrl, query, q);
+  } catch (e) {
+    if (!/no results/.test(e.message)) failedSrc.set(baseUrl, Date.now());
+    throw e;
+  }
+}
+async function searchSaavnWrapperRaw(baseUrl, query, q) {
   const r = await fetch(`${baseUrl}${encodeURIComponent(query)}`, {
     headers: { "User-Agent": UA, Accept: "application/json" },
-    signal: AbortSignal.timeout(5000),
+    signal: AbortSignal.timeout(3500),
   });
   if (!r.ok) throw new Error(`wrapper ${r.status}`);
   const j = await r.json();
@@ -175,8 +184,17 @@ async function searchSaavnWrapper(baseUrl, query, q) {
 }
 
 async function searchSaavnDirect(query, q) {
+  if (srcDown("direct")) return [];
+  try {
+    return await searchSaavnDirectRaw(query, q);
+  } catch (e) {
+    failedSrc.set("direct", Date.now());
+    throw e;
+  }
+}
+async function searchSaavnDirectRaw(query, q) {
   const apiUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&_marker=0&cc=in&includeMetaTags=1&q=${encodeURIComponent(query)}`;
-  const r = await fetch(apiUrl, { headers: { "User-Agent": UA, Accept: "application/json" }, signal: AbortSignal.timeout(5000) });
+  const r = await fetch(apiUrl, { headers: { "User-Agent": UA, Accept: "application/json" }, signal: AbortSignal.timeout(3500) });
   if (!r.ok) throw new Error(`saavn direct ${r.status}`);
   const j = await r.json();
   const out = [];
@@ -246,17 +264,25 @@ function scoreCandidate(c, want) {
 }
 const MIN_SCORE = 0.6;
 
+const failedSrc = new Map(); // source name -> time of last failure; skipped for 3 minutes
+const srcDown = (n) => Date.now() - (failedSrc.get(n) || 0) < 180000;
+
 async function collect(tasks, want) {
   const all = [];
   await new Promise((resolve) => {
     let done = 0;
     let timer = null;
-    const finish = () => resolve();
+    const hard = setTimeout(resolve, 4000); // never wait more than 4 s for slow sources
+    const finish = () => {
+      clearTimeout(hard);
+      resolve();
+    };
+    if (!tasks.length) return finish();
     for (const t of tasks)
       t.then((arr) => {
         all.push(...arr);
         if (arr.some((c) => scoreCandidate(c, want) >= 0.85)) return finish(); // a clear winner: do not wait for slower sources
-        if (!timer) timer = setTimeout(finish, 900);
+        if (!timer && arr.length) timer = setTimeout(finish, 500);
       })
         .catch(() => {})
         .finally(() => {
@@ -266,23 +292,35 @@ async function collect(tasks, want) {
   return all;
 }
 
+// accept a confident title match, or a weaker one whose length agrees with the song to within 8 s
+function acceptable(c, want, s) {
+  if (s >= MIN_SCORE) return true;
+  const d = Number(c.duration) || 0;
+  return s >= 0.35 && want.duration > 0 && d > 0 && Math.abs(d - want.duration) <= 8;
+}
+
 async function resolveFastAudio(id, q, hint) {
   const meta = hint?.title ? { title: hint.title, author: hint.artist || "" } : await getYouTubeMeta(id);
   const queries = buildSearchQueries(meta);
   if (!queries.length) throw new Error("could not read the song title");
   const want = { title: meta.title, artist: meta.author || "", duration: hint?.duration || 0 };
   let best = 0;
-  for (const query of queries) {
+  const run = async (query) => {
     const tasks = [searchSaavnDirect(query, q), ...SAAVN_WRAPPERS.map((w) => searchSaavnWrapper(w, query, q))];
-    const ranked = (await collect(tasks, want))
-      .map((c) => ({ c, s: scoreCandidate(c, want) }))
-      .sort((x, y) => y.s - x.s);
-    if (ranked.length) best = Math.max(best, ranked[0].s);
-    for (const { c, s } of ranked.filter((x) => x.s >= MIN_SCORE).slice(0, 4)) {
-      if (await pickWorking(c)) {
-        c.matchScore = Math.round(s * 100) / 100;
-        return c;
-      }
+    return (await collect(tasks, want)).map((c) => ({ c, s: scoreCandidate(c, want) }));
+  };
+  // all query variants in parallel, then rank everything together
+  const groups = await Promise.all(queries.slice(0, 3).map((x) => run(x).catch(() => [])));
+  const seen = new Set();
+  const ranked = groups
+    .flat()
+    .filter((x) => (seen.has(x.c.url) ? false : seen.add(x.c.url)))
+    .sort((x, y) => y.s - x.s);
+  if (ranked.length) best = ranked[0].s;
+  for (const { c, s } of ranked.filter((x) => acceptable(x.c, want, x.s)).slice(0, 4)) {
+    if (await pickWorking(c)) {
+      c.matchScore = Math.round(s * 100) / 100;
+      return c;
     }
   }
   const err = new Error(best > 0 ? "no matching audio found for this song (only different songs were found)" : "no matching stream found");
@@ -295,7 +333,7 @@ async function resolveFastAudio(id, q, hint) {
 async function pickWorking(res) {
   for (const u of [res.url, ...(res.alts || [])]) {
     try {
-      const r = await fetch(u, { headers: { "User-Agent": UA, Range: "bytes=0-1" }, signal: AbortSignal.timeout(5000) });
+      const r = await fetch(u, { headers: { "User-Agent": UA, Range: "bytes=0-1" }, signal: AbortSignal.timeout(3500) });
       r.body?.cancel?.().catch(() => {});
       if (r.ok || r.status === 206) {
         res.url = u;
@@ -335,7 +373,18 @@ export function resolveAudio(id, q = "normal", kind = "audio", opts) {
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < TTL) return Promise.resolve(hit.data);
   if (inflight.has(key)) return inflight.get(key);
-  const p = run(id, q, kind, opts)
+  const p = (async () => {
+    // a song resolved before (even before a server restart) is served from the database straight away
+    if (store) {
+      try {
+        const saved = await store.get(key);
+        if (saved?.url) return saved;
+      } catch {}
+    }
+    const data = await run(id, q, kind, opts);
+    if (store) store.set(key, data).catch(() => {});
+    return data;
+  })()
     .then((data) => {
       if (cache.size > 300) cache.clear();
       cache.set(key, { at: Date.now(), data });
@@ -346,8 +395,14 @@ export function resolveAudio(id, q = "normal", kind = "audio", opts) {
   return p;
 }
 
+let store = null;
+export function setResolveStore(st) {
+  store = st;
+}
+
 export function dropAudio(id, q = "normal", kind = "audio") {
   cache.delete(`${id}|${kind}|${q}`);
+  if (store) store.del(`${id}|${kind}|${q}`).catch(() => {});
 }
 
 export function ytdlpStatus() {

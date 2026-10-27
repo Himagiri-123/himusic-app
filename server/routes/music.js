@@ -507,7 +507,7 @@ router.post("/links", (req, res) => {
   }
   // start looking up the first songs right away so they are ready when the player asks
   if (ytdlpEnabled() && !ytdlpDown())
-    songs.slice(0, 3).forEach((s) => {
+    songs.slice(0, 5).forEach((s) => {
       if (s?.title && /^[\w-]{6,15}$/.test(String(s.id))) resolveAudio(s.id, q, "audio", { hint: { title: String(s.title).slice(0, 160), artist: String(s.artist || "").slice(0, 100), duration: Number(s.duration) || 0 } }).catch(() => {});
     });
   res.json({ links });
@@ -833,8 +833,8 @@ const TOP_ARTISTS = [
 ];
 
 // GET /api/music/home?artist=NAME  -> Telugu first (new releases, top charts, love, devotional ...), other languages last
-router.get("/home", async (req, res) => {
-  const artist = (req.query.artist || "").toString().trim().slice(0, 80);
+const homeCache = new Map(); // artist -> { at, rows }
+async function buildHome(artist) {
   const year = new Date().getFullYear();
   const jobs = [
     ["new", "New Telugu Releases", `new telugu songs ${year}`],
@@ -872,8 +872,24 @@ router.get("/home", async (req, res) => {
     rows.splice(Math.min(3, rows.length), 0, { id: "artists", title: "Popular Artists", type: "artists", items });
   } catch {}
 
-  res.json({ rows });
+  return rows;
+}
+async function refreshHome(artist) {
+  const rows = await buildHome(artist);
+  if (rows.length) homeCache.set(artist, { at: Date.now(), rows });
+  return rows;
+}
+router.get("/home", async (req, res) => {
+  const artist = (req.query.artist || "").toString().trim().slice(0, 80);
+  const hit = homeCache.get(artist) || homeCache.get("");
+  if (hit) {
+    if (Date.now() - hit.at > 20 * 60 * 1000 && homeCache.get(artist)) refreshHome(artist).catch(() => {});
+    return res.json({ rows: hit.rows });
+  }
+  res.json({ rows: await refreshHome(artist) });
 });
+setTimeout(() => refreshHome("").catch(() => {}), 2000);
+setInterval(() => refreshHome("").catch(() => {}), 20 * 60 * 1000).unref?.();
 
 /* ---------- lyrics (LRCLIB, free, no key) ---------- */
 
