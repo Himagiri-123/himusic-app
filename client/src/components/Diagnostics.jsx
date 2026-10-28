@@ -31,7 +31,7 @@ export default function Diagnostics({ onClose }) {
 
       let t = Date.now();
       try {
-        const r = await withTimeout(fetch(`${API_BASE}/api/music/debug/ytdlp`), 40000, "engine check");
+        const r = await withTimeout(fetch(`${API_BASE}/api/music/debug/ytdlp?t=${encodeURIComponent(p.current?.title || "Butta Bomma")}&a=${encodeURIComponent(p.current?.artist || "Armaan Malik")}`), 40000, "engine check");
         const j = await r.json();
         log(`1 engine: HTTP ${r.status}, ok=${j.ok}, client=${j.workingClient}, ${Date.now() - t} ms`);
       } catch (e) {
@@ -63,7 +63,7 @@ export default function Diagnostics({ onClose }) {
         const buf = await r.arrayBuffer();
         log(`3 audio bytes: HTTP ${r.status}, ${buf.byteLength} bytes, type=${r.headers.get("content-type")}, range=${r.headers.get("content-range")}, ${Date.now() - t} ms`);
       } catch (e) {
-        log(`3 audio bytes: FAIL ${e.message}`);
+        log(`3 audio bytes: FAIL ${e.message} (this check runs in the web page, where CORS can block it; the Android player is not affected)`);
       }
 
       try {

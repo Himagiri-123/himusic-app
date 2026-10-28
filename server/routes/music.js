@@ -512,6 +512,25 @@ router.post("/links", (req, res) => {
 });
 
 // Signed audio proxy: the <audio> tag requests this, we fetch the real file (with Range) and pipe it back.
+// When the song is not in the Saavn catalogue, fall back to the YouTube (Piped / Invidious) streams and pipe them
+// through this server too, so the phone never talks to those hosts directly (no CORS / 403 on the client).
+const ytFallback = new Map(); // id -> { at, info }
+async function resolveWithFallback(id, q, kind, hint) {
+  try {
+    return await resolveAudio(id, q, kind, { hint });
+  } catch (e) {
+    const hit = ytFallback.get(`${id}|${kind}`);
+    if (hit && Date.now() - hit.at < 15 * 60 * 1000) return hit.info;
+    const data = await any(streamTasks(id, await instances())).catch(() => null);
+    const url = kind === "video" ? data?.videoUrl || data?.audioUrl : data?.audioUrl;
+    if (!url) throw e;
+    const info = { url, mime: "audio/mp4", source: "yt-fallback" };
+    if (ytFallback.size > 100) ytFallback.clear();
+    ytFallback.set(`${id}|${kind}`, { at: Date.now(), info });
+    return info;
+  }
+}
+
 router.get("/audio/:id", async (req, res) => {
   const { id } = req.params;
   const kind = req.query.k === "video" ? "video" : "audio";
@@ -519,7 +538,7 @@ router.get("/audio/:id", async (req, res) => {
   if (!/^[\w-]{6,15}$/.test(id) || !verifyAudio(id, kind, q, req.query.exp, req.query.sig)) return res.status(403).end();
   try {
     const hint = req.query.t ? { title: String(req.query.t).slice(0, 160), artist: String(req.query.a || "").slice(0, 100), duration: Number(req.query.d) || 0 } : null;
-    const info = await resolveAudio(id, q, kind, { hint });
+    const info = await resolveWithFallback(id, q, kind, hint);
     const headers = { "User-Agent": UA };
     // Range requests are capped per response. The default (8 MB) is a whole song, so the phone buffers it fully
     // and keeps playing in the background / with the screen off even if the network is throttled.
@@ -536,8 +555,9 @@ router.get("/audio/:id", async (req, res) => {
     if (!up.ok && up.status !== 206) {
       // link went bad (expired / moved): look the song up again once and retry
       dropAudio(id, q, kind);
+      ytFallback.delete(`${id}|${kind}`);
       try {
-        const fresh = await resolveAudio(id, q, kind, { hint });
+        const fresh = await resolveWithFallback(id, q, kind, hint);
         up = await fetch(fresh.url, { headers });
       } catch {}
       if (!up.ok && up.status !== 206) return res.status(502).end();
@@ -686,7 +706,7 @@ router.get("/debug/ytdlp", async (req, res) => {
   const t = Date.now();
   try {
     await ensureYtdlp();
-    await resolveAudio(id, "normal", "audio", { force: true });
+    await resolveAudio(id, "normal", "audio", { force: true, hint: req.query.t ? { title: String(req.query.t).slice(0, 160), artist: String(req.query.a || "").slice(0, 100), duration: 0 } : { title: "Butta Bomma", artist: "Armaan Malik", duration: 0 } });
     res.json({ ok: true, ms: Date.now() - t, ...ytdlpStatus() });
   } catch (e) {
     res.json({ ok: false, error: e.message, ms: Date.now() - t, ...ytdlpStatus() });
