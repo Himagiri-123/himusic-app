@@ -372,13 +372,10 @@ const tierDownAt = {};
 // Only single songs: no jukeboxes, mashups, albums or anything longer than 8 minutes
 // (unless the user typed such a word on purpose, e.g. "jukebox")
 const MIX_WORDS = /\b(jukebox|juke box|nonstop|non-stop|non stop|mashup|mega ?mix|full album|back to back|all songs|audio jukebox|video jukebox|songs collection|hit songs collection|\d{1,3}\s*(best )?songs|top\s*\d{2,3}|playlist|live stream|24\/7)\b/i;
-const MAX_SINGLE_SECONDS = 8 * 60;
 export function onlySingles(results, query = "") {
   const wantsMix = MIX_WORDS.test(query) || /\b(mix|album|mashup)\b/i.test(query);
   if (wantsMix) return results;
   return results.filter((r) => {
-    const d = Number(r.duration) || 0;
-    if (d > MAX_SINGLE_SECONDS) return false;
     if (MIX_WORDS.test(r.title || "")) return false;
     if (/\b(whatsapp status|status video|reels?|shorts?|edit)\b/i.test(r.title || "")) return false; // fan edits, not the song
     return true;
@@ -628,8 +625,11 @@ router.get("/related", async (req, res) => {
   const exclude = new Set(String(req.query.exclude || "").split(",").filter(Boolean));
   if (!title && !artist) return res.json({ results: [] });
   const seedText = `${title} ${artist}`;
-  const lang = detectLang(seedText);
-  const mood = detectMood(title) || detectMood(artist);
+  // the app is Telugu-first: the radio stays Telugu unless the song the user chose is clearly in another language
+  const okLang = (x) => (LANGS.some(([n]) => n === x) ? x : "");
+  const okMood = (x) => (MOOD_WORD[x] ? x : "");
+  const lang = okLang(String(req.query.lang || "")) || detectLang(seedText) || "telugu";
+  const mood = okMood(String(req.query.mood || "")) || detectMood(title) || detectMood(artist);
   const deity = (title.match(DEITY) || [])[0] || "";
   const moodWord = MOOD_WORD[mood] || "";
   const L = lang ? `${lang} ` : "";
@@ -644,14 +644,23 @@ router.get("/related", async (req, res) => {
   const seenQ = new Set();
   const out = [];
   const seedSet = new Set(toWords(title));
+  // which moods may sit next to the seed's mood (devotional never mixes with the others)
+  const MOOD_OK = { devotional: ["devotional"], dance: ["dance"], love: ["love", "sad"], sad: ["sad", "love"] };
+  const moodFits = (rm) => {
+    if (!mood) return rm !== "devotional"; // an unlabelled seed: never drift into god songs
+    if (!rm) return mood !== "devotional"; // an unlabelled song is fine except inside a devotional queue
+    return MOOD_OK[mood].includes(rm);
+  };
   const accept = (r, strict) => {
     if (!r.id || exclude.has(r.id) || out.some((o) => o.id === r.id)) return false;
     if (toWords(r.title).join(" ") === [...seedSet].join(" ")) return false; // same song re-uploaded
     const txt = `${r.title} ${r.artist}`;
     const rl = detectLang(txt);
-    if (lang && rl && rl !== lang) return false; // keep the language of the seed song
-    if (strict && mood === "devotional" && detectMood(txt) !== "devotional") return false;
-    if (strict && mood && mood !== "devotional" && detectMood(txt) === "devotional") return false;
+    if (rl && rl !== lang) return false; // never another language
+    if (strict && !rl) return false; // 1st pass: positively the same language
+    const rm = detectMood(txt);
+    if (!moodFits(rm)) return false;
+    if (strict && mood && rm !== mood) return false; // 1st pass: positively the same mood
     return true;
   };
   const pool = [];
@@ -666,7 +675,7 @@ router.get("/related", async (req, res) => {
   }
   // 1st pass: same language AND same mood; 2nd pass (only if too few): same language
   for (const r of pool) if (accept(r, true)) out.push(r);
-  if (out.length < 8) for (const r of pool) if (accept(r, false)) out.push(r);
+  if (out.length < 12) for (const r of pool) if (accept(r, false)) out.push(r);
   // songs of the same mood first
   if (mood) out.sort((x, y) => (detectMood(`${y.title} ${y.artist}`) === mood) - (detectMood(`${x.title} ${x.artist}`) === mood));
   res.json({ results: out.slice(0, 20), lang, mood });
@@ -818,6 +827,20 @@ router.get("/suggest", async (req, res) => {
 
 /* ---------- home rows ---------- */
 
+const TOP_HEROES = [
+  "Ram Charan",
+  "Allu Arjun",
+  "Mahesh Babu",
+  "Jr NTR",
+  "Prabhas",
+  "Pawan Kalyan",
+  "Chiranjeevi",
+  "Nani",
+  "Vijay Deverakonda",
+  "Balakrishna",
+  "Venkatesh",
+  "Nagarjuna",
+];
 const TOP_ARTISTS = [
   "Sid Sriram",
   "Devi Sri Prasad",
@@ -871,6 +894,29 @@ async function buildHome(artist) {
       return found;
     });
     rows.splice(Math.min(3, rows.length), 0, { id: "artists", title: "Popular Artists", type: "artists", items });
+  } catch {}
+
+  try {
+    const heroes = await cached("heroes-v1", 24 * 60 * 60 * 1000, async () => {
+      const found = await Promise.all(
+        TOP_HEROES.map(async (name) => {
+          const query = `${name} telugu hit songs`;
+          let thumb = "";
+          try {
+            thumb = (await searchArtists(name, { noApi: true }))[0]?.thumbnail || "";
+          } catch {}
+          if (!thumb) {
+            try {
+              thumb = (await runSearch(query)).results[0]?.thumbnail || "";
+            } catch {}
+          }
+          return { id: `hero-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, name, thumbnail: thumb, query };
+        })
+      );
+      return found;
+    });
+    const at = rows.findIndex((r) => r.id === "artists");
+    rows.splice(at >= 0 ? at + 1 : Math.min(4, rows.length), 0, { id: "heroes", title: "Popular Heroes", type: "artists", items: heroes });
   } catch {}
 
   return rows;

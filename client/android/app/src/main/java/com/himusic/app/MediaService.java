@@ -28,6 +28,7 @@ import java.net.URL;
 public class MediaService extends Service {
     public static final String ACTION_UPDATE = "com.himusic.app.UPDATE";
     public static final String ACTION_STOP = "com.himusic.app.STOP";
+    public static final String ACTION_LIKED = "com.himusic.app.LIKED";
     private static final String CHANNEL = "himusic_playback";
     private static final int NOTIF_ID = 7;
 
@@ -37,6 +38,7 @@ public class MediaService extends Service {
 
     public static volatile Listener listener;
     public static volatile boolean running = false;
+    public static volatile boolean liked = false; // is the song on screen in the user's Liked Songs (heart state)
     public static volatile boolean playing = false;
     public static volatile String lastError = ""; // why the foreground notification could not start (shown in the self-test)
 
@@ -61,8 +63,19 @@ public class MediaService extends Service {
             @Override public void onSkipToNext() { emit("next", -1); }
             @Override public void onSkipToPrevious() { emit("previous", -1); }
             @Override public void onSeekTo(long pos) { emit("seek", pos); }
+            @Override public void onCustomAction(String action, android.os.Bundle extras) {
+                if ("LIKE".equals(action)) toggleLike();
+            }
         });
         session.setActive(true);
+    }
+
+    /** heart pressed on the notification / lock screen: flip it at once, and tell the page so the song is really saved */
+    private void toggleLike() {
+        liked = !liked;
+        render();
+        Listener l = listener;
+        if (l != null) l.onAction(liked ? "like" : "unlike", -1);
     }
 
     private void emit(String action, long pos) {
@@ -82,6 +95,12 @@ public class MediaService extends Service {
         if ("PLAY".equals(a)) { emit("play", -1); return START_NOT_STICKY; }
         if ("PAUSE".equals(a)) { emit("pause", -1); return START_NOT_STICKY; }
         if ("NEXT".equals(a)) { emit("next", -1); return START_NOT_STICKY; }
+        if ("LIKE".equals(a)) { toggleLike(); return START_NOT_STICKY; }
+        if (ACTION_LIKED.equals(a) && intent != null) {
+            liked = intent.getBooleanExtra("liked", false);
+            render();
+            return START_NOT_STICKY;
+        }
         if ("PREV".equals(a)) { emit("previous", -1); return START_NOT_STICKY; }
         if (ACTION_UPDATE.equals(a) && intent != null) {
             title = intent.getStringExtra("title");
@@ -118,6 +137,8 @@ public class MediaService extends Service {
                 .setActions(actions)
                 .setState(playing ? PlaybackStateCompat.STATE_PLAYING : PlaybackStateCompat.STATE_PAUSED,
                         position, playing ? 1f : 0f)
+                .addCustomAction(new PlaybackStateCompat.CustomAction.Builder("LIKE", liked ? "Unlike" : "Like",
+                        liked ? R.drawable.ic_heart_on : R.drawable.ic_heart_off).build())
                 .build());
 
         Notification n = buildNotification();
@@ -163,6 +184,7 @@ public class MediaService extends Service {
                 .addAction(playing ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play,
                         playing ? "Pause" : "Play", actionIntent(playing ? "PAUSE" : "PLAY", 2))
                 .addAction(android.R.drawable.ic_media_next, "Next", actionIntent("NEXT", 3))
+                .addAction(liked ? R.drawable.ic_heart_on : R.drawable.ic_heart_off, liked ? "Unlike" : "Like", actionIntent("LIKE", 4))
                 .setStyle(new androidx.media.app.NotificationCompat.MediaStyle()
                         .setMediaSession(session.getSessionToken())
                         .setShowActionsInCompactView(0, 1, 2));

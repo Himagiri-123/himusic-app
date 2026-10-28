@@ -54,8 +54,12 @@ export const api = {
       method: "POST",
       body: { q, songs: songs.map((s) => ({ id: s.id, title: s.title || "", artist: s.artist || "", duration: Math.round(s.duration || 0) })) },
     }),
-  related: (song, exclude = []) =>
-    request(`/api/music/related?title=${enc(song.title || "")}&artist=${enc(song.artist || "")}&exclude=${enc(exclude.slice(-40).join(","))}`),
+  related: (song, exclude = [], anchor = {}) =>
+    request(
+      `/api/music/related?title=${enc(song.title || "")}&artist=${enc(song.artist || "")}&exclude=${enc(exclude.slice(-40).join(","))}` +
+        (anchor.mood ? `&mood=${enc(anchor.mood)}` : "") +
+        (anchor.lang ? `&lang=${enc(anchor.lang)}` : "")
+    ),
   lyrics: (s) =>
     request(`/api/music/lyrics?title=${enc(s.title || "")}&artist=${enc(s.artist || "")}&duration=${Math.round(s.duration || 0)}`),
 

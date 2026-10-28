@@ -63,6 +63,23 @@ public class MediaControlsPlugin extends Plugin {
         }
     }
 
+    /** the page tells the service whether the current song is liked, so the heart on the notification is right */
+    @PluginMethod
+    public void setLiked(PluginCall call) {
+        boolean on = Boolean.TRUE.equals(call.getBoolean("liked", false));
+        MediaService.liked = on;
+        try {
+            if (MediaService.running) {
+                Intent i = new Intent(getContext(), MediaService.class);
+                i.setAction(MediaService.ACTION_LIKED);
+                i.putExtra("liked", on);
+                getContext().startService(i);
+            }
+        } catch (Exception ignored) {
+        }
+        call.resolve();
+    }
+
     @PluginMethod
     public void status(final PluginCall call) {
         // ExoPlayer may only be touched from the main thread, so build the answer there

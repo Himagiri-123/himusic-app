@@ -263,7 +263,6 @@ function scoreCandidate(c, want) {
     else if (diff > 90) score -= 0.35;
     else if (diff > 45) score -= 0.15;
   }
-  if (c.duration > 900) score -= 0.5; // compilations
   const VAR = /\b(remix|mashup|cover|instrumental|karaoke|slowed|reverb|8d|lofi|lo-fi|unplugged|version)\b/i;
   if (VAR.test(c.title) && !VAR.test(want.title)) score -= 0.3; // a remix / cover is not the song the app shows
   return score;
@@ -308,31 +307,55 @@ function acceptable(c, want, s) {
   return s >= 0.35 && want.duration > 0 && d > 0 && Math.abs(d - want.duration) <= 8;
 }
 
+// Never give up on a song: exact match first, then relaxed matches, then the movie's jukebox / any related audio.
 async function resolveFastAudio(id, q, hint) {
   const meta = hint?.title ? { title: hint.title, author: hint.artist || "" } : await getYouTubeMeta(id);
   const queries = buildSearchQueries(meta);
   if (!queries.length) throw new Error("could not read the song title");
   const want = { title: meta.title, artist: meta.author || "", duration: hint?.duration || 0 };
-  let best = 0;
   const run = async (query) => {
     const tasks = [searchSaavnDirect(query, q), ...SAAVN_WRAPPERS.map((w) => searchSaavnWrapper(w, query, q))];
     return (await collect(tasks, want)).map((c) => ({ c, s: scoreCandidate(c, want) }));
   };
-  // all query variants in parallel, then rank everything together
-  const groups = await Promise.all(queries.slice(0, 3).map((x) => run(x).catch(() => [])));
-  const seen = new Set();
-  const ranked = groups
-    .flat()
-    .filter((x) => (seen.has(x.c.url) ? false : seen.add(x.c.url)))
-    .sort((x, y) => y.s - x.s);
-  if (ranked.length) best = ranked[0].s;
-  for (const { c, s } of ranked.filter((x) => acceptable(x.c, want, x.s)).slice(0, 4)) {
-    if (await pickWorking(c)) {
-      c.matchScore = Math.round(s * 100) / 100;
-      return c;
+  const rank = (groups) => {
+    const seen = new Set();
+    return groups
+      .flat()
+      .filter((x) => (seen.has(x.c.url) ? false : seen.add(x.c.url)))
+      .sort((x, y) => y.s - x.s);
+  };
+  const tryList = async (list, n = 4) => {
+    for (const { c, s } of list.slice(0, n)) {
+      if (await pickWorking(c)) {
+        c.matchScore = Math.round(s * 100) / 100;
+        return c;
+      }
     }
-  }
-  const err = new Error(best > 0 ? "no matching audio found for this song (only different songs were found)" : "no matching stream found");
+    return null;
+  };
+  const sameLen = (c) => !want.duration || !c.duration || Math.abs(c.duration - want.duration) <= 10;
+
+  let ranked = rank(await Promise.all(queries.slice(0, 3).map((x) => run(x).catch(() => []))));
+  // 1) exact: confident title match AND the same length
+  let got = await tryList(ranked.filter((x) => x.s >= MIN_SCORE && sameLen(x.c)));
+  if (got) return got;
+  // 2) relaxed: confident title match, or full name inside the title with matching length; length ignored
+  got = await tryList(ranked.filter((x) => acceptable(x.c, want, x.s)));
+  if (got) return got;
+  // 3) anything that shares a word with the song name (a jukebox / other version of it is better than silence)
+  const head = toks(String(want.title).replace(/\([^)]*\)|\[[^\]]*\]/g, " ").split(/[|\-–—:/~]+/).find((x) => toks(x).length) || "");
+  const related = ranked.filter((x) => head.length && coverage(head, toks(`${x.c.title} ${x.c.album}`)) > 0);
+  got = await tryList(related, 6);
+  if (got) return got;
+  // 4) widen the search: the movie / album name, then just the artist, and take the best playable result
+  const parts = String(meta.title).replace(/\([^)]*\)|\[[^\]]*\]/g, " ").split(/[|\-–—:/~]+/).map((x) => x.trim()).filter((x) => x.length > 2);
+  const wide = [];
+  if (parts[1]) wide.push(`${parts[1]} jukebox`, `${parts[1]} songs`);
+  if (meta.author) wide.push(`${parts[0] || ""} ${meta.author}`.trim());
+  const more = rank([ranked, ...(await Promise.all(wide.slice(0, 3).map((x) => run(x).catch(() => []))))]);
+  got = await tryList(more, 8);
+  if (got) return got;
+  const err = new Error("no stream found for this song");
   err.code = "NO_MATCH";
   throw err;
 }

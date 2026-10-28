@@ -17,6 +17,10 @@ export const nativeMedia = {
   stop() {
     MC?.stop().catch(() => {});
   },
+  // heart on the notification / lock screen
+  setLiked(liked) {
+    MC?.setLiked?.({ liked: !!liked })?.catch?.(() => {});
+  },
   onAction(cb) {
     let h;
     MC?.addListener("action", cb).then((x) => (h = x));

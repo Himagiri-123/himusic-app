@@ -17,7 +17,7 @@ export default function Shelf({ title, items, type = "songs" }) {
             <button key={it.id} className="card artist" onClick={() => nav.push({ type: "artist", artist: it })}>
               <Cover src={it.thumbnail} round />
               <div className="card-title center">{it.name}</div>
-              <div className="card-sub center">Artist</div>
+              <div className="card-sub center">{String(it.id).startsWith("hero-") ? "Hero" : "Artist"}</div>
             </button>
           ) : (
             <button key={it.id} className={"card" + (current?.id === it.id ? " active" : "")} onClick={() => play(it, items)}>

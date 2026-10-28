@@ -56,7 +56,7 @@ function loadYT() {
 }
 
 export function PlayerProvider({ children }) {
-  const { addHistory, user, showToast } = useApp();
+  const { addHistory, user, showToast, isLiked, toggleLike } = useApp();
   const resumeRef = useRef(null); // position to continue from after the app was closed
   const loadRef = useRef(null);
   const lastSave = useRef(0);
@@ -125,6 +125,7 @@ export function PlayerProvider({ children }) {
   const listened = useRef(0); // seconds actually heard of the current song (for HiMusic Wrapped)
   const lastTick = useRef(0);
   const radioFor = useRef(null);
+  const radioAnchor = useRef({}); // language + mood of the song the user chose; the radio keeps them
   const eqRef = useRef(null);
 
   const [current, setCurrent] = useState(null);
@@ -324,11 +325,12 @@ export function PlayerProvider({ children }) {
     if (!cur || cur.uri || radioFor.current === cur.id) return; // songs from the phone do not start online radio
     radioFor.current = cur.id;
     try {
-      const r = await api.related(cur, [...playedIds.current]);
+      const r = await api.related(cur, [...playedIds.current], radioAnchor.current);
+      if (!radioAnchor.current.lang && r.lang) radioAnchor.current = { lang: r.lang, mood: r.mood || "" };
       let more = (r.results || []).filter((x) => x.id && !playedIds.current.has(x.id));
       if (more.length < 6) {
         // heard almost everything similar: look again, only avoiding the last songs, so the radio never runs dry
-        const r2 = await api.related(cur, [...playedIds.current].slice(-12));
+        const r2 = await api.related(cur, [...playedIds.current].slice(-12), radioAnchor.current);
         const extra = (r2.results || []).filter((x) => x.id && x.id !== cur.id && !more.some((m) => m.id === x.id));
         more = [...more, ...extra];
         if (more.length) more.forEach((x) => playedIds.current.delete(x.id)); // allow songs that were heard long ago again
@@ -1030,6 +1032,7 @@ export function PlayerProvider({ children }) {
       unlockIdle();
       const i = list.findIndex((s) => s.id === song.id);
       contextRef.current = list;
+      radioAnchor.current = {};
       let rest = i >= 0 ? list.slice(i + 1) : [];
       if (shuffleRef.current) rest = shuffleArr(i >= 0 ? list.filter((s) => s.id !== song.id) : list);
       ctxQ.current = rest;
@@ -1373,6 +1376,8 @@ export function PlayerProvider({ children }) {
   playingRef.current = playing;
   const ctlRef = useRef({});
   ctlRef.current = { toggle, previous, seek };
+  const likeRef = useRef({});
+  likeRef.current = { isLiked, toggleLike };
   useEffect(() => {
     if (!isNative) return;
     return nativeMedia.onAction(({ action, position }) => {
@@ -1382,8 +1387,19 @@ export function PlayerProvider({ children }) {
       else if (action === "next") nextRef.current?.();
       else if (action === "previous") c.previous();
       else if (action === "seek" && position != null) c.seek(position);
+      else if ((action === "like" || action === "unlike") && currentRef.current && !currentRef.current.uri) {
+        // heart pressed on the notification / lock screen
+        const song = currentRef.current;
+        const L = likeRef.current;
+        if (L.isLiked(song.id) !== (action === "like")) L.toggleLike(song);
+      }
     });
   }, []);
+  // keep the heart on the notification in step with the song on screen
+  const likedNow = !!current && !current.uri && isLiked(current.id);
+  useEffect(() => {
+    if (isNative) nativeMedia.setLiked(likedNow);
+  }, [current?.id, likedNow]); // eslint-disable-line
   const durRounded = Math.round(time.dur || 0);
   useEffect(() => {
     if (!isNative) return;

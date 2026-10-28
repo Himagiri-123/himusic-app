@@ -48,7 +48,7 @@ export default function Collection({ view }) {
     setArtistSongs(null);
     setArtistErr("");
     api
-      .search(`${view.artist.name} songs`)
+      .search(view.artist.query || `${view.artist.name} songs`)
       .then((r) => !dead && setArtistSongs(r.results))
       .catch((e) => !dead && (setArtistSongs([]), setArtistErr(e.message)));
     return () => {
