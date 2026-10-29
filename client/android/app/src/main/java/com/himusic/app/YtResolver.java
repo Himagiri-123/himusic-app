@@ -168,6 +168,11 @@ public final class YtResolver {
 
     /** the player name YouTube expects for the address it handed out (some addresses check it) */
     public static String userAgentFor(String url) {
+        try {
+            if (org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper.isVisionOsStreamingUrl(url))
+                return org.schabi.newpipe.extractor.services.youtube.YoutubeParsingHelper.getVisionOsUserAgent(null);
+        } catch (Throwable ignored) {
+        }
         if (url.contains("c=ANDROID")) return "com.google.android.youtube/19.44.38 (Linux; U; Android 14) gzip";
         if (url.contains("c=IOS")) return "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X;)";
         return null;
