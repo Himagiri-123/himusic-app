@@ -28,6 +28,9 @@ export const nativeMedia = {
   },
 };
 
+// self-test: can this phone find the YouTube audio address of a song by itself?
+export const nativeResolveTest = (id) => (MC?.resolveTest ? MC.resolveTest({ id }).then((r) => r?.result || "").catch((e) => "FAIL " + (e?.message || e)) : Promise.resolve("not in this app version"));
+
 export const requestBattery = () => (MC ? MC.requestBattery().catch(() => {}) : Promise.resolve());
 export const nativeStatus = () => (MC ? MC.status().catch((e) => ({ error: String(e?.message || e) })) : Promise.resolve(null));
 

@@ -94,11 +94,31 @@ public final class NativePlayer {
                 .setAllowCrossProtocolRedirects(true)
                 .setConnectTimeoutMs(30000)
                 .setReadTimeoutMs(45000); // the first request for a song can take a while (the server looks the song up)
-        androidx.media3.datasource.DataSource.Factory webSource = http;
+        // songs are looked up on the phone itself first (the phone's connection is not blocked by YouTube);
+        // when that fails the request goes to our server exactly as before
+        androidx.media3.datasource.DataSource.Factory upstream = new androidx.media3.datasource.ResolvingDataSource.Factory(http, spec -> {
+            try {
+                String id = YtResolver.idOf(spec.uri);
+                if (id == null) return spec;
+                String real = YtResolver.resolve(id, YtResolver.qualityOf(spec.uri));
+                if (real == null) return spec;
+                androidx.media3.datasource.DataSpec.Builder b = spec.buildUpon().setUri(android.net.Uri.parse(real));
+                String ua = YtResolver.userAgentFor(real);
+                if (ua != null) {
+                    Map<String, String> hs = new HashMap<>(spec.httpRequestHeaders);
+                    hs.put("User-Agent", ua);
+                    b.setHttpRequestHeaders(hs);
+                }
+                return b.build();
+            } catch (Throwable t) {
+                return spec;
+            }
+        });
+        androidx.media3.datasource.DataSource.Factory webSource = upstream;
         if (cache != null) {
             webSource = new CacheDataSource.Factory()
                     .setCache(cache)
-                    .setUpstreamDataSourceFactory(http)
+                    .setUpstreamDataSourceFactory(upstream)
                     .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR);
         }
         // web songs go through the cache; music files on the phone (content:// / file://) are read directly
@@ -130,6 +150,7 @@ public final class NativePlayer {
 
             @Override
             public void onMediaItemTransition(MediaItem item, int reason) {
+                prefetchAhead();
                 if (item == null) return;
                 if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO || reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK) {
                     JSObject o = new JSObject();
@@ -157,7 +178,9 @@ public final class NativePlayer {
                 // 2nd failure: skip to the next song instead of stopping the music
                 int tries = retries.containsKey(id) ? retries.get(id) : 0;
                 retries.put(id, tries + 1);
-                if (tries < 1) {
+                // the phone's YouTube address failed: look it up again once, then use the server for this song
+                YtResolver.failed(id, tries >= 1);
+                if (tries < 2) {
                     MAIN.postDelayed(() -> {
                         if (player != null && player.getCurrentMediaItem() != null && player.getCurrentMediaItem().mediaId.equals(id)) {
                             player.prepare(); // playWhenReady is kept, so a pause during the wait is respected
@@ -173,6 +196,21 @@ public final class NativePlayer {
                 }
             }
         });
+    }
+
+    /** start looking up the next two songs on the phone, so they begin without a wait */
+    private static void prefetchAhead() {
+        try {
+            if (player == null) return;
+            int idx = player.getCurrentMediaItemIndex();
+            for (int i = idx; i <= idx + 2 && i < player.getMediaItemCount(); i++) {
+                MediaItem m = player.getMediaItemAt(i);
+                if (m.localConfiguration == null) continue;
+                String id = YtResolver.idOf(m.localConfiguration.uri);
+                if (id != null) YtResolver.prefetch(id, YtResolver.qualityOf(m.localConfiguration.uri));
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
     public static void ensure(Context ctx) {
@@ -236,6 +274,7 @@ public final class NativePlayer {
             if (t != null) items.add(item(t));
         }
         if (!items.isEmpty()) player.addMediaItems(items);
+        prefetchAhead();
     }
 
     /** next song of the native queue; false if there is none (the page then decides what comes next) */

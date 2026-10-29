@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { API_BASE } from "../api.js";
-import { isNative, nativeStatus, installedBuild, installedVersion } from "../native.js";
+import { isNative, nativeStatus, nativeResolveTest, installedBuild, installedVersion } from "../native.js";
 import { usePlayer } from "../PlayerContext.jsx";
 
 const TEST_ID = "dQw4w9WgXcQ";
@@ -27,6 +27,8 @@ export default function Diagnostics({ onClose }) {
         const st = await nativeStatus();
         log(`native: ${JSON.stringify(st)}`);
         log(`player: ${JSON.stringify(p.debugInfo?.())}`);
+        const tid = p.current?.id && /^[\w-]{11}$/.test(p.current.id) ? p.current.id : TEST_ID;
+        log(`on-phone lookup (${tid}): ${await withTimeout(nativeResolveTest(tid), 30000, "on-phone lookup").catch((e) => "FAIL " + e.message)}`);
       }
 
       let t = Date.now();

@@ -21,6 +21,7 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+        maven { url 'https://jitpack.io' } // NewPipe extractor (finds YouTube audio addresses on the phone)
     }
 }
 

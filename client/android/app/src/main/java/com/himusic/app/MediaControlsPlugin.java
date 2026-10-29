@@ -64,6 +64,21 @@ public class MediaControlsPlugin extends Plugin {
     }
 
     /** the page tells the service whether the current song is liked, so the heart on the notification is right */
+    /** self-test: can this phone find the YouTube audio address of a song by itself? */
+    @PluginMethod
+    public void resolveTest(final PluginCall call) {
+        final String id = call.getString("id", "");
+        new Thread(() -> {
+            JSObject o = new JSObject();
+            try {
+                o.put("result", YtResolver.test(id));
+            } catch (Throwable t) {
+                o.put("result", "FAIL " + t);
+            }
+            call.resolve(o);
+        }).start();
+    }
+
     @PluginMethod
     public void setLiked(PluginCall call) {
         boolean on = Boolean.TRUE.equals(call.getBoolean("liked", false));
