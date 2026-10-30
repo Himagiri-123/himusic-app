@@ -156,7 +156,7 @@ export default function Player() {
 
   if (!p.expanded) {
     return (
-      <div className="mini" style={{ background: rgb(col, 0.6, 1) }} onClick={p.openFull} role="button" aria-label="Open player">
+      <div className="mini" style={{ background: rgb(col, 0.6, 0.55) }} onClick={p.openFull} role="button" aria-label="Open player">
         <Cover src={current.thumbnail} size={44} />
         <div className="meta">
           <div className="title">{current.title}</div>
@@ -195,8 +195,9 @@ export default function Player() {
   return (
     <div
       className="full"
-      style={{ background: `linear-gradient(180deg, ${rgb(col, 0.95, 1)} 0%, ${rgb(col, 0.5, 1)} 42%, var(--bg) 95%)` }}
+      style={{ background: `linear-gradient(180deg, ${rgb(col, 0.95, 0.62)} 0%, ${rgb(col, 0.5, 0.5)} 42%, var(--bg) 98%), var(--bg)` }}
     >
+      {current?.thumbnail && <div className="full-art" style={{ backgroundImage: `url(${current.thumbnail})` }} aria-hidden="true" />}
       <div className="full-in">
         <div className="full-top">
           <button className="ic" onClick={p.closeFull} aria-label="Close player">

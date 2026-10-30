@@ -409,3 +409,145 @@ html[data-theme="light"] .ic.back { background: rgba(255,255,255,.65); color: #1
 
 .local-cover { display: grid; place-items: center; background: linear-gradient(135deg, #2d1b69, #509bf5); color: #fff; border-radius: 4px; }
 .local-search { width: 100%; border: 0; outline: 0; border-radius: 8px; padding: 12px 14px; background: var(--elev); color: var(--text); font-size: .95rem; }
+
+/* =====================================================================
+   iOS-style Glass theme (glassmorphism): frosted panels over colour and cover art
+   ===================================================================== */
+:root {
+  --glass: rgba(34, 34, 40, .58);
+  --glass-strong: rgba(30, 30, 36, .8);
+  --glass-line: rgba(255, 255, 255, .14);
+  --glass-shine: inset 0 1px 0 rgba(255, 255, 255, .12);
+  --blur: blur(26px) saturate(180%);
+  --r-sm: 12px; --r-md: 16px; --r-lg: 22px;
+}
+html[data-theme="light"] {
+  --glass: rgba(255, 255, 255, .62);
+  --glass-strong: rgba(255, 255, 255, .88);
+  --glass-line: rgba(0, 0, 0, .09);
+  --glass-shine: inset 0 1px 0 rgba(255, 255, 255, .9);
+}
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Circular Std", "Segoe UI", system-ui, Roboto, "Noto Sans Telugu", sans-serif;
+  background-image:
+    radial-gradient(60% 40% at 15% 0%, rgba(29, 185, 84, .16), transparent 70%),
+    radial-gradient(55% 40% at 100% 25%, rgba(90, 80, 255, .16), transparent 70%),
+    radial-gradient(60% 40% at 0% 100%, rgba(255, 90, 140, .12), transparent 70%);
+  background-attachment: fixed;
+}
+html[data-theme="light"] body {
+  background-image:
+    radial-gradient(60% 40% at 15% 0%, rgba(29, 185, 84, .18), transparent 70%),
+    radial-gradient(55% 40% at 100% 25%, rgba(110, 120, 255, .16), transparent 70%),
+    radial-gradient(60% 40% at 0% 100%, rgba(255, 130, 170, .14), transparent 70%);
+}
+
+/* every frosted surface: translucent + blur + hairline border + soft shine */
+.bottom-nav, .page-head, .pop, .sheet, .modal, .mini, .toast, .searchbar, .set-row.glass {
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+}
+
+/* top header: sticks to the top, content blurs behind it */
+.page-head {
+  position: sticky; top: 0; z-index: 25;
+  margin: 0 -16px; padding-left: 16px; padding-right: 16px;
+  background: var(--glass);
+  border-bottom: 1px solid var(--glass-line);
+}
+.page-head h1 { letter-spacing: -.4px; }
+.avatar { box-shadow: 0 2px 8px rgba(0, 0, 0, .3), var(--glass-shine); }
+
+/* bottom navigation: floating frosted bar */
+.bottom-nav,
+html[data-theme="light"] .bottom-nav {
+  background: var(--glass);
+  border-top: 1px solid var(--glass-line);
+  box-shadow: var(--glass-shine);
+}
+.bottom-nav button { transition: color .2s, transform .15s; }
+.bottom-nav button:active { transform: scale(.92); }
+
+/* mini player: a rounded glass pill with the cover colour glowing through */
+.mini {
+  border-radius: var(--r-md);
+  border: 1px solid var(--glass-line);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .35), var(--glass-shine);
+}
+.mini-bar { left: 14px; right: 14px; bottom: 3px; }
+
+/* pop-up menus, sheets, dialogs */
+.pop {
+  background: var(--glass-strong); border: 1px solid var(--glass-line);
+  border-radius: var(--r-md); box-shadow: 0 18px 44px rgba(0, 0, 0, .4), var(--glass-shine);
+}
+.pop-btn { border-radius: var(--r-sm); }
+.sheet-bg, .modal-bg { background: rgba(0, 0, 0, .38); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+html[data-theme="light"] .sheet-bg, html[data-theme="light"] .modal-bg { background: rgba(20, 20, 30, .22); }
+.sheet {
+  background: var(--glass-strong); border: 1px solid var(--glass-line); border-bottom: 0;
+  border-radius: var(--r-lg) var(--r-lg) 0 0; box-shadow: 0 -14px 40px rgba(0, 0, 0, .3), var(--glass-shine);
+}
+.sheet::before { content: ""; display: block; width: 38px; height: 5px; border-radius: 3px; background: var(--glass-line); margin: 4px auto 2px; }
+.sheet-item { border-radius: var(--r-sm); }
+.modal {
+  background: var(--glass-strong); border: 1px solid var(--glass-line);
+  border-radius: var(--r-lg); box-shadow: 0 24px 60px rgba(0, 0, 0, .45), var(--glass-shine);
+}
+.toast {
+  background: var(--glass-strong); color: var(--text); border: 1px solid var(--glass-line);
+  border-radius: 999px; box-shadow: 0 10px 30px rgba(0, 0, 0, .3), var(--glass-shine);
+}
+html[data-theme="light"] .toast { background: var(--glass-strong); color: var(--text); }
+
+/* full-screen player: blurred cover art behind a glass tint */
+.full { background-color: var(--bg); }
+.full-art {
+  position: absolute; inset: -60px; z-index: 0; pointer-events: none;
+  background-size: cover; background-position: center;
+  filter: blur(50px) saturate(1.5); transform: scale(1.15); opacity: .85;
+}
+.full::after {
+  content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background: linear-gradient(180deg, rgba(0, 0, 0, .12), rgba(0, 0, 0, .28) 60%, rgba(0, 0, 0, .5));
+}
+.full-in { position: relative; z-index: 1; }
+.full-top, .full-bottom {
+  border-radius: var(--r-lg);
+}
+.full-bottom {
+  background: rgba(255, 255, 255, .08); border: 1px solid var(--glass-line);
+  -webkit-backdrop-filter: blur(22px) saturate(160%); backdrop-filter: blur(22px) saturate(160%);
+  padding: 12px 14px; box-shadow: var(--glass-shine);
+}
+.full-mid .cover, .full-mid img { border-radius: var(--r-lg); }
+.pill { background: rgba(255, 255, 255, .1); border-color: var(--glass-line); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+.play-btn { box-shadow: 0 8px 24px rgba(0, 0, 0, .35); }
+
+/* content: rounded corners, subtle borders */
+.cover { border-radius: var(--r-sm); }
+.cover.round { border-radius: 50%; }
+.quick-tile .cover { border-radius: 0; }
+.card { border-radius: var(--r-md); }
+.card:hover { background: var(--glass); }
+.card .cover { box-shadow: 0 8px 22px rgba(0, 0, 0, .35); }
+.quick-tile {
+  border-radius: var(--r-sm); background: var(--glass); border: 1px solid var(--glass-line);
+  -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+}
+html[data-theme="light"] .quick-tile { background: var(--glass); }
+.lib-row, .song-row { border-radius: var(--r-sm); }
+.searchbar { background: var(--glass); border: 1px solid var(--glass-line); border-radius: 14px; }
+.btn-green { box-shadow: 0 6px 18px rgba(29, 185, 84, .3); }
+.skeleton, .skeleton-h { border-radius: var(--r-sm); }
+.set-row { border-color: var(--glass-line); }
+.offline-banner { border-radius: var(--r-md); }
+
+/* browsers without backdrop-filter get a solid panel so text stays readable */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root { --glass: rgba(30, 30, 36, .94); --glass-strong: rgba(30, 30, 36, .98); }
+  html[data-theme="light"] { --glass: rgba(255, 255, 255, .96); --glass-strong: rgba(255, 255, 255, .99); }
+}
+.searchbar input, .searchbar .ic { color: var(--text); }
+.searchbar input::placeholder { color: var(--sub); }
+.song-row .cover { border-radius: 10px; }
